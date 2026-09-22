@@ -38,7 +38,7 @@ function touch(o) { o.updatedAt = now(); }
 
 /* ---------- état UI ---------- */
 const state = { view: 'home', deckId: null, filter: 'all', study: null, shuffle: true, editId: null, editFrom: null, addCount: 0, msg: '', lastField: 'eq', closedFolders: new Set(),
-  imp: { tab: 'csv', deckId: '', newName: '', text: '', delim: 'auto', header: false, cardSep: 'nl', fieldSep: 'tab', customCard: '', customField: '', which: 'first' } };
+  imp: { tab: 'csv', deckId: '', newName: '', text: '', delim: 'auto', header: false, cardSep: 'nl', fieldSep: 'tab', customCard: '', customField: '', which: 'first', addCount: 0 } };
 const go = (view, extra = {}) => { Object.assign(state, { view }, extra); render(); window.scrollTo(0, 0); };
 
 /* ---------- LaTeX ---------- */
@@ -59,7 +59,8 @@ const LATEX_SNIPPETS = [
   ['ineq', '≤≥', '\\leq \\geq'], ['mat', '▦', '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'], ['dollar', '$…$', null],
 ];
 function insertSnippet(kind) {
-  const el = document.getElementById(state.lastField === 'ea' ? 'ea' : 'eq');
+  const fid = ['eq', 'ea', 'mq', 'ma'].includes(state.lastField) ? state.lastField : 'eq';
+  const el = document.getElementById(fid);
   if (!el) return;
   el.focus();
   const s = el.selectionStart, e = el.selectionEnd, val = el.value, sel = val.slice(s, e);
@@ -174,11 +175,17 @@ const views = {
       <div><label>Entre question et réponse</label><select data-f="fieldSep">${opt('tab', 'Tabulation', i.fieldSep)}${opt(';', 'Point-virgule ;', i.fieldSep)}${opt(',', 'Virgule ,', i.fieldSep)}${opt(' - ', 'Tiret « - »', i.fieldSep)}${opt(' : ', 'Deux-points « : »', i.fieldSep)}${opt('|', 'Barre |', i.fieldSep)}${opt('=', 'Égal =', i.fieldSep)}${opt('custom', 'Personnalisé…', i.fieldSep)}</select>
       ${i.fieldSep === 'custom' ? `<input type="text" data-f="customField" value="${esc(i.customField)}" placeholder="ex: ->  ou  ???">` : ''}</div></div>
       <label>Si le séparateur apparaît plusieurs fois</label><select data-f="which">${opt('first', 'Couper au premier', i.which)}${opt('last', 'Couper au dernier', i.which)}</select>`;
+    const manual = `${i.addCount ? `<p class="mut">✅ ${i.addCount} carte(s) ajoutée(s) dans cette session.</p>` : ''}
+      ${latexToolbar()}
+      <label>Question</label><textarea id="mq" placeholder="Texte + LaTeX, ex : dérivée de $x^2$ ?"></textarea>
+      <label>Réponse</label><textarea id="ma" placeholder="ex : $2x$"></textarea>
+      <label>Aperçu</label><div class="box math" id="mpv"></div>
+      <button class="pri" data-a="addmanual">+ Ajouter cette carte</button>`;
     return `<div class="bar"><button data-a="${state.deckId ? 'opendeck' : 'home'}">← Retour</button></div><h1>Importer des cartes</h1>
-      <div class="bar tabs"><button class="${i.tab === 'csv' ? 'on' : ''}" data-a="imptab" data-id="csv">📄 Fichier CSV</button><button class="${i.tab === 'paste' ? 'on' : ''}" data-a="imptab" data-id="paste">📋 Copier-coller</button></div>
-      <div class="box">${target}${i.tab === 'csv' ? csv : paste}</div>
-      <div class="box"><b id="impcount"></b><pre class="pv math" id="imppv"></pre></div>
-      <button class="pri" data-a="doimport">Importer</button>`;
+      <div class="bar tabs"><button class="${i.tab === 'csv' ? 'on' : ''}" data-a="imptab" data-id="csv">📄 Fichier CSV</button><button class="${i.tab === 'paste' ? 'on' : ''}" data-a="imptab" data-id="paste">📋 Copier-coller</button><button class="${i.tab === 'manual' ? 'on' : ''}" data-a="imptab" data-id="manual">✍️ Carte par carte</button></div>
+      <div class="box">${target}${i.tab === 'csv' ? csv : i.tab === 'paste' ? paste : manual}</div>
+      ${i.tab !== 'manual' ? `<div class="box"><b id="impcount"></b><pre class="pv math" id="imppv"></pre></div>
+      <button class="pri" data-a="doimport">Importer</button>` : ''}`;
   },
   settings() {
     const need = !clientId();
@@ -199,7 +206,7 @@ const views = {
 };
 function render() {
   $app.innerHTML = views[state.view]();
-  if (state.view === 'import') updatePreview();
+  if (state.view === 'import') { if (state.imp.tab === 'manual') updateManualPv(); else updatePreview(); }
   if (state.view === 'edit') { updateEditPv(); const el = document.getElementById(state.lastField === 'ea' ? 'ea' : 'eq'); if (el && !state.editId) el.focus(); }
   typeset();
 }
@@ -247,6 +254,10 @@ function updatePreview() {
 }
 function updateEditPv() {
   const q = document.getElementById('eq'), a = document.getElementById('ea'), p = document.getElementById('epv');
+  if (!q) return; p.textContent = q.value + '\n\n' + a.value; p.style.whiteSpace = 'pre-wrap'; typeset();
+}
+function updateManualPv() {
+  const q = document.getElementById('mq'), a = document.getElementById('ma'), p = document.getElementById('mpv');
   if (!q) return; p.textContent = q.value + '\n\n' + a.value; p.style.whiteSpace = 'pre-wrap'; typeset();
 }
 async function readFile(f) {
@@ -390,8 +401,22 @@ const A = {
   flip() { state.study.flip = !state.study.flip; render(); },
   ans: id => answer(id),
   back() { const st = state.study; if (st.i > 0) { st.i--; st.flip = false; render(); } },
-  import(id) { state.imp.deckId = id || state.deckId || ''; state.imp.text = ''; go('import'); },
-  imptab(id) { state.imp.tab = id; state.imp.text = ''; render(); },
+  import(id) { state.imp.deckId = id || state.deckId || ''; state.imp.text = ''; state.imp.addCount = 0; go('import'); },
+  imptab(id) { state.imp.tab = id; state.imp.text = ''; if (id === 'manual') state.lastField = 'mq'; render(); },
+  addmanual() {
+    const i = state.imp;
+    const q = document.getElementById('mq').value.trim(), a = document.getElementById('ma').value.trim();
+    if (!q || !a) return alert('Question et réponse requises.');
+    let deckId = i.deckId;
+    if (!deckId) {
+      const n = i.newName.trim(); if (!n) return alert('Donne un nom au nouveau paquet.');
+      deckId = uid(); db.decks[deckId] = { id: deckId, name: n, folderId: null, updatedAt: now() };
+      i.deckId = deckId;
+    }
+    addCard(deckId, q, a); save();
+    i.addCount = (i.addCount || 0) + 1;
+    render();
+  },
   doimport() {
     const i = state.imp, rows = getRows();
     if (!rows.length) return alert('Aucune carte à importer.');
@@ -439,8 +464,9 @@ document.addEventListener('input', e => {
   const t = e.target;
   if (t.dataset.f) { state.imp[t.dataset.f] = t.value; updatePreview(); }
   if (t.id === 'eq' || t.id === 'ea') updateEditPv();
+  if (t.id === 'mq' || t.id === 'ma') updateManualPv();
 });
-document.addEventListener('focus', e => { if (e.target.id === 'eq' || e.target.id === 'ea') state.lastField = e.target.id; }, true);
+document.addEventListener('focus', e => { if (['eq', 'ea', 'mq', 'ma'].includes(e.target.id)) state.lastField = e.target.id; }, true);
 document.addEventListener('keydown', e => {
   if (state.view !== 'study' || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   const st = state.study; if (st.i >= st.queue.length) return;
