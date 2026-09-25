@@ -2,6 +2,12 @@
 const $app = document.getElementById('app');
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const MATH_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/;
+// **gras**  __souligné__  ==surligné== ; les segments LaTeX sont laissés intacts
+function fmt(s) {
+  return String(s ?? '').split(MATH_RE).map((p, i) => i % 2 ? esc(p)
+    : esc(p).replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>').replace(/__([\s\S]+?)__/g, '<u>$1</u>').replace(/==([\s\S]+?)==/g, '<mark>$1</mark>')).join('');
+}
 const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
 
 /* ---------- stockage ---------- */
@@ -21,13 +27,13 @@ const decks = () => Object.values(db.decks).filter(d => !d.deleted).sort((a, b) 
 const folders = () => Object.values(db.folders).filter(f => !f.deleted).sort((a, b) => a.name.localeCompare(b.name));
 const cardsOf = id => Object.values(db.cards).filter(c => !c.deleted && c.deckId === id);
 function stats(id) {
-  const s = { total: 0, known: 0, unknown: 0, new: 0 };
-  for (const c of cardsOf(id)) { s.total++; s[c.status]++; }
+  const s = { total: 0, known: 0, unknown: 0, new: 0, flag: 0 };
+  for (const c of cardsOf(id)) { s.total++; s[c.status]++; if (c.flag) s.flag++; }
   return s;
 }
 function sumStats(list) {
-  const s = { total: 0, known: 0, unknown: 0, new: 0 };
-  list.forEach(d => { const x = stats(d.id); s.total += x.total; s.known += x.known; s.unknown += x.unknown; s.new += x.new; });
+  const s = { total: 0, known: 0, unknown: 0, new: 0, flag: 0 };
+  list.forEach(d => { const x = stats(d.id); s.total += x.total; s.known += x.known; s.unknown += x.unknown; s.new += x.new; s.flag += x.flag; });
   return s;
 }
 function addCard(deckId, q, a, status = 'new') {
@@ -58,14 +64,18 @@ const LATEX_SNIPPETS = [
   ['sum', '∑', '\\sum_{i=1}^{n}'], ['int', '∫', '\\int_{}^{}'], ['greek', 'αβπ', '\\alpha \\beta \\pi'],
   ['ineq', '≤≥', '\\leq \\geq'], ['mat', '▦', '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'], ['dollar', '$…$', null],
 ];
+const FORMATS = [['bold', '<b>G</b>', '**', 'Gras (Ctrl+B)'], ['under', '<u>S</u>', '__', 'Souligné (Ctrl+U)'], ['hl', '<mark>Surligner</mark>', '==', 'Surligner']];
+const FIELD_IDS = ['eq', 'ea', 'mq', 'ma', 'ptext'];
 function insertSnippet(kind) {
-  const fid = ['eq', 'ea', 'mq', 'ma'].includes(state.lastField) ? state.lastField : 'eq';
+  const fid = FIELD_IDS.includes(state.lastField) ? state.lastField : 'eq';
   const el = document.getElementById(fid);
   if (!el) return;
   el.focus();
   const s = el.selectionStart, e = el.selectionEnd, val = el.value, sel = val.slice(s, e);
   let insert, pos;
-  if (kind === 'dollar') { insert = sel ? `$${sel}$` : '$$'; pos = sel ? s + insert.length : s + 1; }
+  const fm = FORMATS.find(x => x[0] === kind);
+  if (fm) { insert = fm[2] + sel + fm[2]; pos = sel ? s + insert.length : s + fm[2].length; }
+  else if (kind === 'dollar') { insert = sel ? `$${sel}$` : '$$'; pos = sel ? s + insert.length : s + 1; }
   else {
     insert = LATEX_SNIPPETS.find(x => x[0] === kind)[2];
     const b = insert.indexOf('{}');
@@ -73,16 +83,16 @@ function insertSnippet(kind) {
   }
   el.value = val.slice(0, s) + insert + val.slice(e);
   el.setSelectionRange(pos, pos);
-  updateEditPv();
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-const latexToolbar = () => `<div class="bar ltb">${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
+const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
 
 /* ---------- vues ---------- */
 function bar(s) {
   const t = s.total || 1;
   return `<div class="prog"><i class="g" style="width:${s.known / t * 100}%"></i><i class="r" style="width:${s.unknown / t * 100}%"></i></div>`;
 }
-const chips = s => `<div class="chips"><span class="chip">${s.total} cartes</span><span class="chip g">✓ ${s.known}</span><span class="chip r">✗ ${s.unknown}</span><span class="chip">○ ${s.new}</span></div>`;
+const chips = s => `<div class="chips"><span class="chip">${s.total} cartes</span><span class="chip g">✓ ${s.known}</span><span class="chip r">✗ ${s.unknown}</span><span class="chip">○ ${s.new}</span>${s.flag ? `<span class="chip f">🚩 ${s.flag}</span>` : ''}</div>`;
 function deckBox(d) {
   const s = stats(d.id);
   return `<div class="box deck" data-a="open" data-id="${d.id}"><b>${esc(d.name)}</b>
@@ -115,7 +125,7 @@ const views = {
     const d = db.decks[state.deckId]; if (!d) return go('home'), '';
     const s = stats(d.id);
     let cs = cardsOf(d.id);
-    if (state.filter !== 'all') cs = cs.filter(c => c.status === state.filter);
+    if (state.filter !== 'all') cs = cs.filter(c => state.filter === 'flag' ? c.flag : c.status === state.filter);
     const tab = (f, l) => `<button class="${state.filter === f ? 'pri' : ''}" data-a="filter" data-id="${f}">${l}</button>`;
     const folderSel = `<select data-f="deckFolder">${opt('', '📁 Sans classeur', d.folderId || '')}${folders().map(f => opt(f.id, esc(f.name), d.folderId || '')).join('')}</select>`;
     return `<div class="bar"><button data-a="home">← Retour</button><span class="sp"></span><button data-a="rename">✏️ Renommer</button><button class="danger" data-a="deldeck">🗑️</button></div>
@@ -124,13 +134,15 @@ const views = {
         <div class="bar" style="margin-top:12px">
           <button class="pri" data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>▶ Continuer le tri (${s.new})</button>
           <button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
-          <button data-a="study" data-id="all" ${s.total ? '' : 'disabled'}>Tout réviser</button></div>
+          <button data-a="study" data-id="all" ${s.total ? '' : 'disabled'}>Tout réviser</button>
+          <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
         <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" data-a="shuffle" ${state.shuffle ? 'checked' : ''}> Mélanger</label>
+        <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:6px 0 0"><input type="checkbox" data-a="autoflag" ${cfg.autoFlag !== false ? 'checked' : ''}> 🚩 Marquer automatiquement mes erreurs</label>
         <div class="row" style="margin:10px 0 0;align-items:center"><div class="bar" style="margin:0"><button data-a="reset">↺ Réinitialiser le tri</button><button data-a="import" data-id="${d.id}">⬇️ Importer dans ce paquet</button></div>${folderSel}</div></div>
       <div class="bar"><button class="pri" data-a="addcard">+ Ajouter une carte</button><span class="sp"></span></div>
-      <div class="bar tabs">${tab('all', 'Toutes')}${tab('new', '⚪ Non triées')}${tab('unknown', '❌ À revoir')}${tab('known', '✅ Connues')}</div>
-      ${cs.map(c => `<div class="box"><div class="cl"><span class="dot ${c.status}"></span><div class="math"><b>${esc(c.q)}</b><br>${esc(c.a)}</div>
-        <button data-a="editcard" data-id="${c.id}">✏️</button></div></div>`).join('') || '<p class="mut">Rien ici.</p>'}`;
+      <div class="bar tabs">${tab('all', 'Toutes')}${tab('new', '⚪ Non triées')}${tab('unknown', '❌ À revoir')}${tab('known', '✅ Connues')}${tab('flag', '🚩 Marquées')}</div>
+      ${cs.map(c => `<div class="box"><div class="cl"><span class="dot ${c.status}"></span><div class="math"><b>${fmt(c.q)}</b><br>${fmt(c.a)}</div>
+        <button data-a="flagcard" data-id="${c.id}" title="Marquer / démarquer">${c.flag ? '🚩' : '⚐'}</button><button data-a="editcard" data-id="${c.id}">✏️</button></div></div>`).join('') || '<p class="mut">Rien ici.</p>'}`;
   },
   edit() {
     const c = state.editId ? db.cards[state.editId] : null;
@@ -152,15 +164,16 @@ const views = {
       const s = stats(st.deckId);
       return `<h1>Session terminée 🎉</h1><div class="box">✅ Connues : <b>${k}</b><br>❌ À revoir : <b>${u}</b><br><span class="mut">Le tri est sauvegardé.</span></div>
         <div class="bar"><button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir les « je ne connais pas » (${s.unknown})</button>
-        <button data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>Continuer le tri (${s.new})</button><button data-a="opendeck">Retour au paquet</button></div>`;
+        <button data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>Continuer le tri (${s.new})</button>
+        <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button><button data-a="opendeck">Retour au paquet</button></div>`;
     }
     const c = db.cards[st.queue[st.i]];
     return `<div class="bar"><button data-a="opendeck">✕ Quitter</button><span class="sp"></span><span class="mut">${esc(d.name)} · ${st.i + 1}/${st.queue.length}</span></div>
       <div class="prog" style="margin:0 0 12px"><i class="g" style="width:${st.i / st.queue.length * 100}%"></i></div>
-      <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span><div class="fc-in">${esc(st.flip ? c.a : c.q)}</div></div>
+      <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}${c.flag ? ' 🚩' : ''}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
       ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
         : `<div class="ans"><button class="pri" data-a="flip">Retourner (espace)</button></div>`}
-      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">← à revoir · → connue</span></div>`;
+      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">← à revoir · → connue · F marquer</span></div>`;
   },
   import() {
     const i = state.imp;
@@ -169,7 +182,7 @@ const views = {
     const csv = `<label>Fichier CSV (colonne 1 = question, colonne 2 = réponse)</label><input type="file" id="csvfile" accept=".csv,.txt,.tsv">
       <div class="row"><div><label>Séparateur de colonnes</label><select data-f="delim">${opt('auto', 'Automatique', i.delim)}${opt(';', 'Point-virgule ;', i.delim)}${opt(',', 'Virgule ,', i.delim)}${opt('\t', 'Tabulation', i.delim)}</select></div>
       <div><label>&nbsp;</label><label style="font-weight:400"><input type="checkbox" data-f="header" ${i.header ? 'checked' : ''}> 1ʳᵉ ligne = en-têtes</label></div></div>`;
-    const paste = `<label>Colle ton texte</label><textarea data-f="text" style="min-height:160px">${esc(i.text)}</textarea>
+    const paste = `<label>Colle ton texte</label>${latexToolbar()}<textarea id="ptext" data-f="text" style="min-height:160px">${esc(i.text)}</textarea>
       <div class="row"><div><label>Entre deux cartes</label><select data-f="cardSep">${opt('nl', 'Nouvelle ligne', i.cardSep)}${opt('blank', 'Ligne vide', i.cardSep)}${opt('custom', 'Personnalisé…', i.cardSep)}</select>
       ${i.cardSep === 'custom' ? `<input type="text" data-f="customCard" value="${esc(i.customCard)}" placeholder="ex: ;;  (\\n = retour ligne)">` : ''}</div>
       <div><label>Entre question et réponse</label><select data-f="fieldSep">${opt('tab', 'Tabulation', i.fieldSep)}${opt(';', 'Point-virgule ;', i.fieldSep)}${opt(',', 'Virgule ,', i.fieldSep)}${opt(' - ', 'Tiret « - »', i.fieldSep)}${opt(' : ', 'Deux-points « : »', i.fieldSep)}${opt('|', 'Barre |', i.fieldSep)}${opt('=', 'Égal =', i.fieldSep)}${opt('custom', 'Personnalisé…', i.fieldSep)}</select>
@@ -184,7 +197,7 @@ const views = {
     return `<div class="bar"><button data-a="${state.deckId ? 'opendeck' : 'home'}">← Retour</button></div><h1>Importer des cartes</h1>
       <div class="bar tabs"><button class="${i.tab === 'csv' ? 'on' : ''}" data-a="imptab" data-id="csv">📄 Fichier CSV</button><button class="${i.tab === 'paste' ? 'on' : ''}" data-a="imptab" data-id="paste">📋 Copier-coller</button><button class="${i.tab === 'manual' ? 'on' : ''}" data-a="imptab" data-id="manual">✍️ Carte par carte</button></div>
       <div class="box">${target}${i.tab === 'csv' ? csv : i.tab === 'paste' ? paste : manual}</div>
-      ${i.tab !== 'manual' ? `<div class="box"><b id="impcount"></b><pre class="pv math" id="imppv"></pre></div>
+      ${i.tab !== 'manual' ? `<div class="box"><b id="impcount"></b><div class="pv math" id="imppv"></div></div>
       <button class="pri" data-a="doimport">Importer</button>` : ''}`;
   },
   settings() {
@@ -250,15 +263,15 @@ function getRows() {
 function updatePreview() {
   const r = getRows();
   document.getElementById('impcount').textContent = `${r.length} carte(s) détectée(s)`;
-  document.getElementById('imppv').textContent = r.slice(0, 5).map(x => `Q : ${x[0]}\nR : ${x[1]}`).join('\n──────\n');
+  document.getElementById('imppv').innerHTML = r.slice(0, 5).map(x => `Q : ${fmt(x[0])}\nR : ${fmt(x[1])}`).join('\n──────\n'); typeset();
 }
 function updateEditPv() {
   const q = document.getElementById('eq'), a = document.getElementById('ea'), p = document.getElementById('epv');
-  if (!q) return; p.textContent = q.value + '\n\n' + a.value; p.style.whiteSpace = 'pre-wrap'; typeset();
+  if (!q) return; p.innerHTML = fmt(q.value) + '\n\n' + fmt(a.value); p.style.whiteSpace = 'pre-wrap'; typeset();
 }
 function updateManualPv() {
   const q = document.getElementById('mq'), a = document.getElementById('ma'), p = document.getElementById('mpv');
-  if (!q) return; p.textContent = q.value + '\n\n' + a.value; p.style.whiteSpace = 'pre-wrap'; typeset();
+  if (!q) return; p.innerHTML = fmt(q.value) + '\n\n' + fmt(a.value); p.style.whiteSpace = 'pre-wrap'; typeset();
 }
 async function readFile(f) {
   const buf = await f.arrayBuffer();
@@ -269,15 +282,18 @@ async function readFile(f) {
 
 /* ---------- étude ---------- */
 function startStudy(mode) {
-  let cs = cardsOf(state.deckId).filter(c => mode === 'all' || c.status === mode);
+  let cs = cardsOf(state.deckId).filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
   if (state.shuffle) for (let i = cs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cs[i], cs[j]] = [cs[j], cs[i]]; }
   if (!cs.length) return;
-  state.study = { deckId: state.deckId, queue: cs.map(c => c.id), i: 0, flip: false, res: {} };
+  state.study = { deckId: state.deckId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode };
   go('study');
 }
 function answer(k) {
   const st = state.study, c = db.cards[st.queue[st.i]];
-  c.status = k; touch(c); st.res[c.id] = k; save();
+  c.status = k; touch(c); st.res[c.id] = k;
+  if (k === 'unknown' && cfg.autoFlag !== false) c.flag = true;
+  else if (k === 'known' && st.mode === 'flag') c.flag = false;
+  save();
   st.i++; st.flip = false; render();
 }
 
@@ -380,6 +396,8 @@ const A = {
   shuffle(id, el) { state.shuffle = el.checked; },
   study: id => startStudy(id),
   reset() { if (!confirm('Remettre toutes les cartes en « non triées » ?')) return; cardsOf(state.deckId).forEach(c => { c.status = 'new'; touch(c); }); save(); render(); },
+  flagcard(id) { const c = db.cards[id]; c.flag = !c.flag; touch(c); save(); render(); },
+  flagstudy() { const st = state.study, c = db.cards[st.queue[st.i]]; c.flag = !c.flag; touch(c); save(); render(); },
   addcard: () => go('edit', { editId: null, editFrom: null, addCount: 0 }),
   editcard: id => go('edit', { editId: id, editFrom: null }),
   editstudy() { const st = state.study; go('edit', { editId: st.queue[st.i], editFrom: 'study' }); },
@@ -402,7 +420,7 @@ const A = {
   ans: id => answer(id),
   back() { const st = state.study; if (st.i > 0) { st.i--; st.flip = false; render(); } },
   import(id) { state.imp.deckId = id || state.deckId || ''; state.imp.text = ''; state.imp.addCount = 0; go('import'); },
-  imptab(id) { state.imp.tab = id; state.imp.text = ''; if (id === 'manual') state.lastField = 'mq'; render(); },
+  imptab(id) { state.imp.tab = id; state.imp.text = ''; if (id === 'manual') state.lastField = 'mq'; if (id === 'paste') state.lastField = 'ptext'; render(); },
   addmanual() {
     const i = state.imp;
     const q = document.getElementById('mq').value.trim(), a = document.getElementById('ma').value.trim();
@@ -449,6 +467,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', async e => {
   const t = e.target;
   if (t.dataset.a === 'shuffle') return A.shuffle(null, t);
+  if (t.dataset.a === 'autoflag') { cfg.autoFlag = t.checked; saveCfg(); return; }
   if (t.dataset.f === 'deckFolder') { const d = db.decks[state.deckId]; d.folderId = t.value || null; touch(d); save(); render(); return; }
   if (t.id === 'csvfile' && t.files[0]) { state.imp.text = await readFile(t.files[0]); updatePreview(); return; }
   if (t.id === 'jsonfile' && t.files[0]) {
@@ -466,13 +485,15 @@ document.addEventListener('input', e => {
   if (t.id === 'eq' || t.id === 'ea') updateEditPv();
   if (t.id === 'mq' || t.id === 'ma') updateManualPv();
 });
-document.addEventListener('focus', e => { if (['eq', 'ea', 'mq', 'ma'].includes(e.target.id)) state.lastField = e.target.id; }, true);
+document.addEventListener('focus', e => { if (FIELD_IDS.includes(e.target.id)) state.lastField = e.target.id; }, true);
 document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && FIELD_IDS.includes(e.target.id) && (e.key === 'b' || e.key === 'u')) { e.preventDefault(); state.lastField = e.target.id; insertSnippet(e.key === 'b' ? 'bold' : 'under'); return; }
   if (state.view !== 'study' || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
   const st = state.study; if (st.i >= st.queue.length) return;
   if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); A.flip(); }
   else if (e.key === 'ArrowRight' && st.flip) answer('known');
   else if (e.key === 'ArrowLeft' && st.flip) answer('unknown');
+  else if (e.key === 'f' || e.key === 'F') A.flagstudy();
 });
 
 // reconnexion automatique : dès le 1er clic/toucher, si la session Google a expiré
