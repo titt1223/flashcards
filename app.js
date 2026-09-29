@@ -67,22 +67,23 @@ const LATEX_SNIPPETS = [
   ['ineq', '≤≥', '\\leq \\geq'], ['mat', '▦', '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'], ['dollar', '$…$', null],
 ];
 const FORMATS = [['bold', '<b>G</b>', '**', 'Gras (Ctrl+B)'], ['under', '<u>S</u>', '__', 'Souligné (Ctrl+U)'], ['hl', '<mark>Surligner</mark>', '==', 'Surligner']];
-const COLOR_PRESETS = [['red', '#d94f4f'], ['orange', '#dd8a2e'], ['blue', '#3f7fd1'], ['purple', '#9d5fc0']];
 const FIELD_IDS = ['eq', 'ea', 'mq', 'ma', 'ptext'];
 function insertSnippet(kind) {
   const fid = FIELD_IDS.includes(state.lastField) ? state.lastField : 'eq';
   const el = document.getElementById(fid);
   if (!el) return;
   el.focus();
-  const s = el.selectionStart, e = el.selectionEnd, val = el.value, sel = val.slice(s, e);
+  const s = el.selectionStart, e = el.selectionEnd, val = el.value;
+  let sel = val.slice(s, e);
   let insert, pos;
   const fm = FORMATS.find(x => x[0] === kind);
-  if (fm) { insert = fm[2] + sel + fm[2]; pos = sel ? s + insert.length : s + fm[2].length; }
-  else if (kind.startsWith('ucol_')) {
-    const tag = kind.slice(5);
-    const preset = COLOR_PRESETS.find(x => x[0] === tag);
-    const col = preset ? preset[1] : ((document.getElementById('ucolor') || {}).value || '#3f7fd1');
-    insert = `[[${col}:${sel}]]`; pos = sel ? s + insert.length : s + `[[${col}:`.length;
+  const isColor = kind === 'ucolor';
+  if (fm || isColor) {
+    // sur mobile la sélection de texte est peu fiable : si rien n'est sélectionné, on demande le texte
+    if (!sel) { sel = window.prompt('Texte à formater ?'); if (!sel) return; }
+    if (isColor) { const col = (document.getElementById('ucolor') || {}).value || '#3f7fd1'; insert = `[[${col}:${sel}]]`; }
+    else insert = fm[2] + sel + fm[2];
+    pos = s + insert.length;
   }
   else if (kind === 'dollar') { insert = sel ? `$${sel}$` : '$$'; pos = sel ? s + insert.length : s + 1; }
   else {
@@ -95,9 +96,10 @@ function insertSnippet(kind) {
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}
-  ${COLOR_PRESETS.map(c => `<button type="button" title="Souligner en couleur" data-a="latex" data-id="ucol_${c[0]}"><span style="text-decoration:underline;text-decoration-color:${c[1]};text-decoration-thickness:3px">S</span></button>`).join('')}
-  <input type="color" id="ucolor" value="#3f7fd1" title="Couleur personnalisée" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
-  <button type="button" title="Souligner avec la couleur choisie" data-a="latex" data-id="ucol_custom">🖊️S</button>
+  <span style="display:inline-flex;align-items:center;gap:4px">
+    <input type="color" id="ucolor" value="#3f7fd1" title="Couleur du soulignement" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
+    <button type="button" title="Souligner avec cette couleur" data-a="latex" data-id="ucolor">🖌️S</button>
+  </span>
   ${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
 
 /* ---------- vues ---------- */
