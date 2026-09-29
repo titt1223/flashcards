@@ -45,7 +45,7 @@ function addCard(deckId, q, a, status = 'new') {
 function touch(o) { o.updatedAt = now(); }
 
 /* ---------- état UI ---------- */
-const state = { view: 'home', deckId: null, filter: 'all', study: null, shuffle: true, editId: null, editFrom: null, addCount: 0, msg: '', lastField: 'eq', closedFolders: new Set(),
+const state = { view: 'home', deckId: null, studyFolderId: null, filter: 'all', study: null, shuffle: true, editId: null, editFrom: null, addCount: 0, msg: '', lastField: 'eq', closedFolders: new Set(),
   imp: { tab: 'csv', deckId: '', newName: '', text: '', delim: 'auto', header: false, cardSep: 'nl', fieldSep: 'tab', customCard: '', customField: '', which: 'first', addCount: 0 } };
 const go = (view, extra = {}) => { Object.assign(state, { view }, extra); render(); window.scrollTo(0, 0); };
 
@@ -120,6 +120,11 @@ function folderBox(f) {
       <div style="flex:1"><b>📁 ${esc(f.name)}</b> <span class="mut">· ${ds.length} paquet(s)</span>${chips(s)}</div>
       <span class="fold-ico">${closed ? '▸' : '▾'}</span>
     </div>
+    <div class="bar" style="margin:6px 0 0">
+      <button class="pri" data-a="foldstudy" data-id="${f.id}" data-mode="new" ${s.new ? '' : 'disabled'}>▶ Continuer le tri (${s.new})</button>
+      <button class="ko" data-a="foldstudy" data-id="${f.id}" data-mode="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
+      <button data-a="foldstudy" data-id="${f.id}" data-mode="all" ${s.total ? '' : 'disabled'}>Tout réviser le classeur</button>
+      <button data-a="foldstudy" data-id="${f.id}" data-mode="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
     <div class="bar" style="margin:6px 0 0"><button data-a="renamefolder" data-id="${f.id}">✏️ Renommer</button><button class="danger" data-a="delfolder" data-id="${f.id}">🗑️ Supprimer</button></div>
     ${closed ? '' : `<div style="margin-top:10px;display:grid;gap:10px">${ds.map(deckBox).join('') || '<p class="mut">Classeur vide. Ouvre un paquet et choisis ce classeur.</p>'}</div>`}
   </div>`;
@@ -149,9 +154,6 @@ const views = {
           <button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
           <button data-a="study" data-id="all" ${s.total ? '' : 'disabled'}>Tout réviser</button>
           <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
-        <div class="bar" style="margin-top:8px">
-          <button data-a="browse" data-id="all" ${s.total ? '' : 'disabled'}>👁️ Parcourir toutes les cartes (${s.total})</button>
-          <button data-a="browse" data-id="new" ${s.new ? '' : 'disabled'}>👁️ Parcourir les non triées (${s.new})</button></div>
         <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" data-a="shuffle" ${state.shuffle ? 'checked' : ''}> Mélanger</label>
         <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:6px 0 0"><input type="checkbox" data-a="autoflag" ${cfg.autoFlag !== false ? 'checked' : ''}> 🚩 Marquer automatiquement mes erreurs</label>
         <div class="row" style="margin:10px 0 0;align-items:center"><div class="bar" style="margin:0"><button data-a="reset">↺ Réinitialiser le tri</button><button data-a="import" data-id="${d.id}">⬇️ Importer dans ce paquet</button></div>${folderSel}</div></div>
@@ -174,27 +176,23 @@ const views = {
         : `<button class="pri" data-a="savecard">Enregistrer</button><button data-a="canceledit">Annuler</button><span class="sp"></span>${c ? '<button class="danger" data-a="delcard">Supprimer</button>' : ''}`}</div>`;
   },
   study() {
-    const st = state.study, d = db.decks[st.deckId];
-    if (st.browse && st.i >= st.queue.length) {
-      return `<h1>Fin du parcours 👁️</h1><div class="box mut">${st.queue.length} carte(s) parcourue(s). Rien n'a été modifié.</div>
-        <div class="bar"><button data-a="browse" data-id="${st.mode}">↺ Recommencer</button><button data-a="opendeck">Retour au paquet</button></div>`;
-    }
+    const st = state.study;
+    const scopeName = st.folderId ? `📁 ${esc((db.folders[st.folderId] || {}).name || '')}` : esc((db.decks[st.deckId] || {}).name || '');
     if (st.i >= st.queue.length) {
       const k = Object.values(st.res).filter(x => x === 'known').length, u = Object.values(st.res).filter(x => x === 'unknown').length;
-      const s = stats(st.deckId);
+      const s = st.folderId ? sumStats(decks().filter(d => d.folderId === st.folderId)) : stats(st.deckId);
       return `<h1>Session terminée 🎉</h1><div class="box">✅ Connues : <b>${k}</b><br>❌ À revoir : <b>${u}</b><br><span class="mut">Le tri est sauvegardé.</span></div>
         <div class="bar"><button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir les « je ne connais pas » (${s.unknown})</button>
         <button data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>Continuer le tri (${s.new})</button>
-        <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button><button data-a="opendeck">Retour au paquet</button></div>`;
+        <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button><button data-a="studyback">Retour</button></div>`;
     }
     const c = db.cards[st.queue[st.i]];
-    return `<div class="bar"><button data-a="opendeck">✕ Quitter</button><span class="sp"></span><span class="mut">${esc(d.name)} · ${st.i + 1}/${st.queue.length}</span></div>
+    return `<div class="bar"><button data-a="studyback">✕ Quitter</button><span class="sp"></span><span class="mut">${scopeName} · ${st.i + 1}/${st.queue.length}</span></div>
       <div class="prog" style="margin:0 0 12px"><i class="g" style="width:${st.i / st.queue.length * 100}%"></i></div>
       <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}${c.flag ? ' 🚩' : ''}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
-      ${st.browse ? `<div class="ans"><button class="pri" data-a="browsenext">Suivante ▶</button></div>`
-        : st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
+      ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
         : `<div class="ans"><button class="pri" data-a="flip">Retourner (espace)</button></div>`}
-      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">${st.browse ? 'Mode parcourir · rien n\'est modifié' : '← à revoir · → connue · F marquer'}</span></div>`;
+      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">← à revoir · → connue · F marquer</span></div>`;
   },
   import() {
     const i = state.imp;
@@ -302,11 +300,18 @@ async function readFile(f) {
 }
 
 /* ---------- étude ---------- */
-function startStudy(mode, browse) {
-  let cs = cardsOf(state.deckId).filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
+function studyCardsBase() {
+  if (state.studyFolderId) {
+    const ids = decks().filter(d => d.folderId === state.studyFolderId).map(d => d.id);
+    return Object.values(db.cards).filter(c => !c.deleted && ids.includes(c.deckId));
+  }
+  return cardsOf(state.deckId);
+}
+function startStudy(mode) {
+  let cs = studyCardsBase().filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
   if (state.shuffle) for (let i = cs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cs[i], cs[j]] = [cs[j], cs[i]]; }
   if (!cs.length) return;
-  state.study = { deckId: state.deckId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode, browse: !!browse };
+  state.study = { deckId: state.deckId, folderId: state.studyFolderId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode };
   go('study');
 }
 function answer(k) {
@@ -396,8 +401,9 @@ window.addEventListener('online', () => { if (cfg.signedIn) doSync(true); });
 const A = {
   home: () => go('home'), settings: () => go('settings'),
   newdeck() { const n = prompt('Nom du paquet ?'); if (!n) return; const id = uid(); db.decks[id] = { id, name: n.trim(), folderId: null, updatedAt: now() }; save(); go('deck', { deckId: id, filter: 'all' }); },
-  open: id => go('deck', { deckId: id, filter: 'all' }),
+  open: id => { state.studyFolderId = null; go('deck', { deckId: id, filter: 'all' }); },
   opendeck: () => go('deck'),
+  studyback() { const st = state.study; go(st && st.folderId ? 'home' : 'deck'); },
   rename() { const d = db.decks[state.deckId]; const n = prompt('Nouveau nom ?', d.name); if (n) { d.name = n.trim(); touch(d); save(); render(); } },
   deldeck() {
     if (!confirm('Supprimer ce paquet et toutes ses cartes ?')) return;
@@ -415,9 +421,8 @@ const A = {
   togglefolder(id) { if (state.closedFolders.has(id)) state.closedFolders.delete(id); else state.closedFolders.add(id); render(); },
   filter: id => go('deck', { filter: id }),
   shuffle(id, el) { state.shuffle = el.checked; },
-  study: id => startStudy(id),
-  browse: id => startStudy(id, true),
-  browsenext() { const st = state.study; st.i++; st.flip = false; render(); },
+  study: id => { state.studyFolderId = null; startStudy(id); },
+  foldstudy(folderId, t) { state.studyFolderId = folderId; state.deckId = null; startStudy(t.dataset.mode); },
   reset() { if (!confirm('Remettre toutes les cartes en « non triées » ?')) return; cardsOf(state.deckId).forEach(c => { c.status = 'new'; touch(c); }); save(); render(); },
   flagcard(id) { const c = db.cards[id]; c.flag = !c.flag; touch(c); save(); render(); },
   flagstudy() { const st = state.study, c = db.cards[st.queue[st.i]]; c.flag = !c.flag; touch(c); save(); render(); },
