@@ -6,7 +6,9 @@ const MATH_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\
 // **gras**  __souligné__  ==surligné== ; les segments LaTeX sont laissés intacts
 function fmt(s) {
   return String(s ?? '').split(MATH_RE).map((p, i) => i % 2 ? esc(p)
-    : esc(p).replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>').replace(/__([\s\S]+?)__/g, '<u>$1</u>').replace(/==([\s\S]+?)==/g, '<mark>$1</mark>')).join('');
+    : esc(p)
+        .replace(/\[\[(#[0-9a-fA-F]{3,8}):([\s\S]+?)\]\]/g, (_, col, txt) => `<u style="text-decoration-color:${col};text-decoration-thickness:2px;text-underline-offset:2px">${txt}</u>`)
+        .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>').replace(/__([\s\S]+?)__/g, '<u>$1</u>').replace(/==([\s\S]+?)==/g, '<mark>$1</mark>')).join('');
 }
 const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
 
@@ -65,6 +67,7 @@ const LATEX_SNIPPETS = [
   ['ineq', '≤≥', '\\leq \\geq'], ['mat', '▦', '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'], ['dollar', '$…$', null],
 ];
 const FORMATS = [['bold', '<b>G</b>', '**', 'Gras (Ctrl+B)'], ['under', '<u>S</u>', '__', 'Souligné (Ctrl+U)'], ['hl', '<mark>Surligner</mark>', '==', 'Surligner']];
+const COLOR_PRESETS = [['red', '#d94f4f'], ['orange', '#dd8a2e'], ['blue', '#3f7fd1'], ['purple', '#9d5fc0']];
 const FIELD_IDS = ['eq', 'ea', 'mq', 'ma', 'ptext'];
 function insertSnippet(kind) {
   const fid = FIELD_IDS.includes(state.lastField) ? state.lastField : 'eq';
@@ -75,6 +78,12 @@ function insertSnippet(kind) {
   let insert, pos;
   const fm = FORMATS.find(x => x[0] === kind);
   if (fm) { insert = fm[2] + sel + fm[2]; pos = sel ? s + insert.length : s + fm[2].length; }
+  else if (kind.startsWith('ucol_')) {
+    const tag = kind.slice(5);
+    const preset = COLOR_PRESETS.find(x => x[0] === tag);
+    const col = preset ? preset[1] : ((document.getElementById('ucolor') || {}).value || '#3f7fd1');
+    insert = `[[${col}:${sel}]]`; pos = sel ? s + insert.length : s + `[[${col}:`.length;
+  }
   else if (kind === 'dollar') { insert = sel ? `$${sel}$` : '$$'; pos = sel ? s + insert.length : s + 1; }
   else {
     insert = LATEX_SNIPPETS.find(x => x[0] === kind)[2];
@@ -85,7 +94,11 @@ function insertSnippet(kind) {
   el.setSelectionRange(pos, pos);
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
+const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}
+  ${COLOR_PRESETS.map(c => `<button type="button" title="Souligner en couleur" data-a="latex" data-id="ucol_${c[0]}"><span style="text-decoration:underline;text-decoration-color:${c[1]};text-decoration-thickness:3px">S</span></button>`).join('')}
+  <input type="color" id="ucolor" value="#3f7fd1" title="Couleur personnalisée" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
+  <button type="button" title="Souligner avec la couleur choisie" data-a="latex" data-id="ucol_custom">🖊️S</button>
+  ${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
 
 /* ---------- vues ---------- */
 function bar(s) {
@@ -117,7 +130,7 @@ const views = {
     const noFolder = all.filter(d => !d.folderId || !db.folders[d.folderId] || db.folders[d.folderId].deleted);
     const fs = folders();
     const list = fs.map(folderBox).join('') + noFolder.map(deckBox).join('');
-    return `<div class="hero"><div class="logo">🌿</div><div><h1>Flashcards</h1><div class="mut">${all.length} paquet(s)${cfg.signedIn ? ' · 🔄 synchro auto' : ''}</div></div></div>${!cfg.signedIn && clientId() ? '<div class="banner"><span>☁️ Retrouve tes paquets sur tous tes appareils.</span><button class="pri" data-a="connect">Continuer avec Google</button></div>' : ''}${state.needLogin ? '<div class="banner">Session Google expirée. <button class="pri" data-a="relogin">Se reconnecter</button></div>' : ''}
+    return `<div class="hero"><div class="logo"><img src="icon-192.png" alt=""></div><div><h1>Flashcards</h1><div class="mut">${all.length} paquet(s)${cfg.signedIn ? ' · 🔄 synchro auto' : ''}</div></div></div>${!cfg.signedIn && clientId() ? '<div class="banner"><span>☁️ Retrouve tes paquets sur tous tes appareils.</span><button class="pri" data-a="connect">Continuer avec Google</button></div>' : ''}${state.needLogin ? '<div class="banner">Session Google expirée. <button class="pri" data-a="relogin">Se reconnecter</button></div>' : ''}
       <div class="bar"><button class="pri" data-a="newdeck">+ Nouveau paquet</button><button data-a="newfolder">📁 Nouveau classeur</button><button data-a="import">⬇️ Importer</button><span class="sp"></span><button data-a="settings">☁️ Sync / Sauvegarde</button></div>
       ${list || '<div class="empty"><div class="big">🌱</div><p class="mut">Aucun paquet pour l\'instant.<br>Crée-en un ou importe des cartes.</p></div>'}`;
   },
@@ -136,6 +149,9 @@ const views = {
           <button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
           <button data-a="study" data-id="all" ${s.total ? '' : 'disabled'}>Tout réviser</button>
           <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
+        <div class="bar" style="margin-top:8px">
+          <button data-a="browse" data-id="all" ${s.total ? '' : 'disabled'}>👁️ Parcourir toutes les cartes (${s.total})</button>
+          <button data-a="browse" data-id="new" ${s.new ? '' : 'disabled'}>👁️ Parcourir les non triées (${s.new})</button></div>
         <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" data-a="shuffle" ${state.shuffle ? 'checked' : ''}> Mélanger</label>
         <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:6px 0 0"><input type="checkbox" data-a="autoflag" ${cfg.autoFlag !== false ? 'checked' : ''}> 🚩 Marquer automatiquement mes erreurs</label>
         <div class="row" style="margin:10px 0 0;align-items:center"><div class="bar" style="margin:0"><button data-a="reset">↺ Réinitialiser le tri</button><button data-a="import" data-id="${d.id}">⬇️ Importer dans ce paquet</button></div>${folderSel}</div></div>
@@ -159,6 +175,10 @@ const views = {
   },
   study() {
     const st = state.study, d = db.decks[st.deckId];
+    if (st.browse && st.i >= st.queue.length) {
+      return `<h1>Fin du parcours 👁️</h1><div class="box mut">${st.queue.length} carte(s) parcourue(s). Rien n'a été modifié.</div>
+        <div class="bar"><button data-a="browse" data-id="${st.mode}">↺ Recommencer</button><button data-a="opendeck">Retour au paquet</button></div>`;
+    }
     if (st.i >= st.queue.length) {
       const k = Object.values(st.res).filter(x => x === 'known').length, u = Object.values(st.res).filter(x => x === 'unknown').length;
       const s = stats(st.deckId);
@@ -171,9 +191,10 @@ const views = {
     return `<div class="bar"><button data-a="opendeck">✕ Quitter</button><span class="sp"></span><span class="mut">${esc(d.name)} · ${st.i + 1}/${st.queue.length}</span></div>
       <div class="prog" style="margin:0 0 12px"><i class="g" style="width:${st.i / st.queue.length * 100}%"></i></div>
       <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}${c.flag ? ' 🚩' : ''}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
-      ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
+      ${st.browse ? `<div class="ans"><button class="pri" data-a="browsenext">Suivante ▶</button></div>`
+        : st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
         : `<div class="ans"><button class="pri" data-a="flip">Retourner (espace)</button></div>`}
-      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">← à revoir · → connue · F marquer</span></div>`;
+      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">${st.browse ? 'Mode parcourir · rien n\'est modifié' : '← à revoir · → connue · F marquer'}</span></div>`;
   },
   import() {
     const i = state.imp;
@@ -281,11 +302,11 @@ async function readFile(f) {
 }
 
 /* ---------- étude ---------- */
-function startStudy(mode) {
+function startStudy(mode, browse) {
   let cs = cardsOf(state.deckId).filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
   if (state.shuffle) for (let i = cs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cs[i], cs[j]] = [cs[j], cs[i]]; }
   if (!cs.length) return;
-  state.study = { deckId: state.deckId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode };
+  state.study = { deckId: state.deckId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode, browse: !!browse };
   go('study');
 }
 function answer(k) {
@@ -395,6 +416,8 @@ const A = {
   filter: id => go('deck', { filter: id }),
   shuffle(id, el) { state.shuffle = el.checked; },
   study: id => startStudy(id),
+  browse: id => startStudy(id, true),
+  browsenext() { const st = state.study; st.i++; st.flip = false; render(); },
   reset() { if (!confirm('Remettre toutes les cartes en « non triées » ?')) return; cardsOf(state.deckId).forEach(c => { c.status = 'new'; touch(c); }); save(); render(); },
   flagcard(id) { const c = db.cards[id]; c.flag = !c.flag; touch(c); save(); render(); },
   flagstudy() { const st = state.study, c = db.cards[st.queue[st.i]]; c.flag = !c.flag; touch(c); save(); render(); },
