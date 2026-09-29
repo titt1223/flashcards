@@ -3,11 +3,11 @@ const $app = document.getElementById('app');
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const MATH_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/;
-// **gras**  __souligné__  ==surligné== ; les segments LaTeX sont laissés intacts
+// **gras**  __souligné__  ==surligné==  [[#couleur:surligné en couleur]] ; les segments LaTeX sont laissés intacts
 function fmt(s) {
   return String(s ?? '').split(MATH_RE).map((p, i) => i % 2 ? esc(p)
     : esc(p)
-        .replace(/\[\[(#[0-9a-fA-F]{3,8}):([\s\S]+?)\]\]/g, (_, col, txt) => `<u style="text-decoration-color:${col};text-decoration-thickness:2px;text-underline-offset:2px">${txt}</u>`)
+        .replace(/\[\[(#[0-9a-fA-F]{3,8}):([\s\S]+?)\]\]/g, (_, col, txt) => `<mark style="background:color-mix(in srgb, ${col} 55%, transparent)">${txt}</mark>`)
         .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>').replace(/__([\s\S]+?)__/g, '<u>$1</u>').replace(/==([\s\S]+?)==/g, '<mark>$1</mark>')).join('');
 }
 const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
@@ -77,11 +77,11 @@ function insertSnippet(kind) {
   let sel = val.slice(s, e);
   let insert, pos;
   const fm = FORMATS.find(x => x[0] === kind);
-  const isColor = kind === 'ucolor';
+  const isColor = kind === 'hlcolor';
   if (fm || isColor) {
     // sur mobile la sélection de texte est peu fiable : si rien n'est sélectionné, on demande le texte
     if (!sel) { sel = window.prompt('Texte à formater ?'); if (!sel) return; }
-    if (isColor) { const col = (document.getElementById('ucolor') || {}).value || '#3f7fd1'; insert = `[[${col}:${sel}]]`; }
+    if (isColor) { const col = (document.getElementById('hlcolor') || {}).value || '#3f7fd1'; insert = `[[${col}:${sel}]]`; }
     else insert = fm[2] + sel + fm[2];
     pos = s + insert.length;
   }
@@ -97,8 +97,8 @@ function insertSnippet(kind) {
 }
 const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}
   <span style="display:inline-flex;align-items:center;gap:4px">
-    <input type="color" id="ucolor" value="#3f7fd1" title="Couleur du soulignement" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
-    <button type="button" title="Souligner avec cette couleur" data-a="latex" data-id="ucolor">🖌️S</button>
+    <input type="color" id="hlcolor" value="#f2d64b" title="Couleur du surlignage" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
+    <button type="button" title="Surligner avec cette couleur" data-a="latex" data-id="hlcolor">🖍️</button>
   </span>
   ${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
 
