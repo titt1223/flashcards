@@ -398,6 +398,10 @@ const GOOGLE_CLIENT_ID = '357404140201-h93hvb0gqv6us3fvetc3tfj7p3fj7vce.apps.goo
 const clientId = () => cfg.clientId || GOOGLE_CLIENT_ID;
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata openid email';
 let tok = null, tokExp = 0, gis = null, syncing = false, syncInterval = null, refreshing = false, nextTry = 0;
+// le jeton Google (valable ~1 h) est conservé d'une page à l'autre : un rafraîchissement ne demande plus de se reconnecter
+try { const s = JSON.parse(localStorage.getItem('fc_tok')); if (s && s.exp > now() + 60000) { tok = s.tok; tokExp = s.exp; } } catch (e) {}
+const forgetTok = () => { tok = null; tokExp = 0; try { localStorage.removeItem('fc_tok'); } catch (e) {} };
+const tokOk = () => !!tok && now() < tokExp - 60000;
 function loadGis() {
   return gis || (gis = new Promise((res, rej) => {
     const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client';
@@ -410,7 +414,8 @@ async function getToken(prompt) {
   await loadGis();
   return new Promise((res, rej) => {
     const conf = { client_id: clientId(), scope: SCOPE,
-      callback: r => { if (r.error) return rej(new Error(r.error)); tok = r.access_token; tokExp = now() + r.expires_in * 1000; res(tok); },
+      callback: r => { if (r.error) return rej(new Error(r.error)); tok = r.access_token; tokExp = now() + r.expires_in * 1000;
+        try { localStorage.setItem('fc_tok', JSON.stringify({ tok, exp: tokExp })); } catch (e) {} res(tok); },
       error_callback: e => rej(new Error(e.type || 'Connexion annulée')) };
     if (cfg.email) conf.hint = cfg.email;   // évite le choix de compte quand plusieurs comptes Google sont ouverts
     google.accounts.oauth2.initTokenClient(conf).requestAccessToken({ prompt });
@@ -425,13 +430,15 @@ async function learnEmail() {
 const setMsg = m => { state.msg = m; const e = $('syncmsg'); if (e) e.textContent = m; };
 async function drive(path, opt = {}, upload = false) {
   const r = await fetch('https://www.googleapis.com/' + (upload ? 'upload/' : '') + 'drive/v3/' + path, { ...opt, headers: { Authorization: 'Bearer ' + tok, ...(opt.headers || {}) } });
-  if (r.status === 401) { tok = null; throw new Error('Session expirée'); }
+  if (r.status === 401) { forgetTok(); throw new Error('Session expirée'); }
   if (!r.ok) throw new Error('Erreur Drive ' + r.status);
   return r;
 }
 // prompt: 'none' = silencieux (auto), '' = normal, 'select_account' = choix du compte
 async function doSync(auto, prompt = 'none') {
   if (!cfg.signedIn || syncing) return;
+  // jeton expiré : le navigateur bloque toute fenêtre Google sans geste de l'utilisateur, on attend donc le prochain toucher (silentRefresh)
+  if (auto && !tokOk()) return;
   syncing = true;
   try {
     setMsg('Synchronisation…');
@@ -631,7 +638,7 @@ const A = {
     try { await getToken(''); state.needLogin = false; updateCloud(); await doSync(false); if (state.view === 'settings') render(); } catch (e) { setMsg('⚠️ ' + e.message); }
   },
   sync: () => doSync(false, ''),
-  unlink() { cfg.signedIn = false; cfg.last = ''; cfg.email = ''; tok = null; state.needLogin = false; clearInterval(syncInterval); saveCfg(); state.msg = 'Déconnecté.'; render(); },
+  unlink() { cfg.signedIn = false; cfg.last = ''; cfg.email = ''; forgetTok(); state.needLogin = false; clearInterval(syncInterval); saveCfg(); state.msg = 'Déconnecté.'; render(); },
   export() {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(db)], { type: 'application/json' }));
