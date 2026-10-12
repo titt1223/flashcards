@@ -1,5 +1,7 @@
 'use strict';
 const $app = document.getElementById('app');
+const $sheet = document.getElementById('sheet');
+const $ = id => document.getElementById(id);
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const MATH_RE = /(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/;
@@ -10,11 +12,19 @@ function fmt(s) {
         .replace(/\[\[(#[0-9a-fA-F]{3,8}):([\s\S]+?)\]\]/g, (_, col, txt) => `<mark style="background:color-mix(in srgb, ${col} 55%, transparent)">${txt}</mark>`)
         .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>').replace(/__([\s\S]+?)__/g, '<u>$1</u>').replace(/==([\s\S]+?)==/g, '<mark>$1</mark>')).join('');
 }
+// texte brut (sans marques de mise en forme), sans accents ni majuscules : pour la recherche
+const norm = s => String(s ?? '').replace(/\*\*|__|==|\[\[#[0-9a-fA-F]{3,8}:|\]\]/g, '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+function matches(c, q) {
+  const words = norm(q).split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = norm(c.q) + ' ' + norm(c.a);
+  return words.every(w => hay.includes(w));
+}
 const opt = (v, l, cur) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${l}</option>`;
 
 /* ---------- stockage ---------- */
 let db = { decks: {}, cards: {}, folders: {} };
-let cfg = { signedIn: false, clientId: '', last: '' };
+let cfg = { signedIn: false, clientId: '', last: '', email: '' };
 try { db = { ...db, ...JSON.parse(localStorage.getItem('fc_data')) }; } catch (e) {}
 db.decks = db.decks || {}; db.cards = db.cards || {}; db.folders = db.folders || {};
 try { cfg = { ...cfg, ...JSON.parse(localStorage.getItem('fc_cfg')) }; } catch (e) {}
@@ -45,11 +55,23 @@ function addCard(deckId, q, a, status = 'new') {
 function touch(o) { o.updatedAt = now(); }
 
 /* ---------- état UI ---------- */
-const state = { view: 'home', deckId: null, studyFolderId: null, filter: 'all', study: null, shuffle: true, editId: null, editFrom: null, addCount: 0, msg: '', lastField: 'eq', closedFolders: new Set(),
+const state = { view: 'home', deckId: null, filter: 'all', search: '', gsearch: '', selMode: false, sel: new Set(), study: null, shuffle: true,
+  editId: null, editFrom: null, addCount: 0, impFrom: 'home', msg: '', lastField: 'eq', closedFolders: new Set(), needLogin: false,
   imp: { tab: 'csv', deckId: '', newName: '', text: '', delim: 'auto', header: false, cardSep: 'nl', fieldSep: 'tab', customCard: '', customField: '', which: 'first', addCount: 0 } };
-const go = (view, extra = {}) => { Object.assign(state, { view }, extra); render(); window.scrollTo(0, 0); };
+const go = (view, extra = {}) => {
+  closeSheet();
+  if (view !== 'deck') { state.selMode = false; state.sel = new Set(); }
+  Object.assign(state, { view }, extra); render(); window.scrollTo(0, 0);
+};
 
-/* ---------- LaTeX ---------- */
+/* ---------- feuilles (menus) ---------- */
+function showSheet(title, body) {
+  $sheet.innerHTML = `<div class="backdrop" data-a="closesheet"></div><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${title ? `<h3>${esc(title)}</h3>` : ''}${body}</div>`;
+}
+function closeSheet() { if ($sheet.innerHTML) $sheet.innerHTML = ''; }
+const srow = (label, sub, attrs, cls = '') => `<button class="srow ${cls}" ${attrs}><span>${label}</span>${sub !== '' && sub != null ? `<small>${sub}</small>` : ''}</button>`;
+
+/* ---------- LaTeX & mise en forme ---------- */
 function typeset() {
   if (!window.renderMathInElement) return;
   document.querySelectorAll('.math').forEach(el => {
@@ -66,11 +88,11 @@ const LATEX_SNIPPETS = [
   ['sum', '∑', '\\sum_{i=1}^{n}'], ['int', '∫', '\\int_{}^{}'], ['greek', 'αβπ', '\\alpha \\beta \\pi'],
   ['ineq', '≤≥', '\\leq \\geq'], ['mat', '▦', '\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}'], ['dollar', '$…$', null],
 ];
-const FORMATS = [['bold', '<b>G</b>', '**', 'Gras (Ctrl+B)'], ['under', '<u>S</u>', '__', 'Souligné (Ctrl+U)'], ['hl', '<mark>Surligner</mark>', '==', 'Surligner']];
+const FORMATS = [['bold', '**'], ['under', '__'], ['hl', '==']];
 const FIELD_IDS = ['eq', 'ea', 'mq', 'ma', 'ptext'];
 function insertSnippet(kind) {
   const fid = FIELD_IDS.includes(state.lastField) ? state.lastField : 'eq';
-  const el = document.getElementById(fid);
+  const el = $(fid);
   if (!el) return;
   el.focus();
   const s = el.selectionStart, e = el.selectionEnd, val = el.value;
@@ -81,8 +103,8 @@ function insertSnippet(kind) {
   if (fm || isColor) {
     // sur mobile la sélection de texte est peu fiable : si rien n'est sélectionné, on demande le texte
     if (!sel) { sel = window.prompt('Texte à formater ?'); if (!sel) return; }
-    if (isColor) { const col = (document.getElementById('hlcolor') || {}).value || '#3f7fd1'; insert = `[[${col}:${sel}]]`; }
-    else insert = fm[2] + sel + fm[2];
+    if (isColor) { const col = ($('hlcolor') || {}).value || '#f2d64b'; insert = `[[${col}:${sel}]]`; }
+    else insert = fm[1] + sel + fm[1];
     pos = s + insert.length;
   }
   else if (kind === 'dollar') { insert = sel ? `$${sel}$` : '$$'; pos = sel ? s + insert.length : s + 1; }
@@ -95,12 +117,12 @@ function insertSnippet(kind) {
   el.setSelectionRange(pos, pos);
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-const latexToolbar = () => `<div class="bar ltb">${FORMATS.map(x => `<button type="button" title="${x[3]}" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}
-  <span style="display:inline-flex;align-items:center;gap:4px">
-    <input type="color" id="hlcolor" value="#f2d64b" title="Couleur du surlignage" style="width:38px;height:38px;padding:2px;border-radius:10px;border:1.5px solid var(--bd);background:var(--card);cursor:pointer">
-    <button type="button" title="Surligner avec cette couleur" data-a="latex" data-id="hlcolor">🖍️</button>
-  </span>
-  ${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`;
+// barre compacte : gras, souligné, surligner (+ couleur), formules
+const latexToolbar = () => `<div class="ltb">
+  <button type="button" class="ib" title="Gras (Ctrl+B)" data-a="latex" data-id="bold"><b>G</b></button>
+  <button type="button" class="ib" title="Souligné (Ctrl+U)" data-a="latex" data-id="under"><u>S</u></button>
+  <span class="hlgrp"><button type="button" class="ib" title="Surligner" data-a="latex" data-id="hlcolor">🖍️</button><input type="color" id="hlcolor" value="#f2d64b" title="Couleur du surlignage"></span>
+  <button type="button" class="ib" title="Formules LaTeX" data-a="latexmenu">Σ</button></div>`;
 
 /* ---------- vues ---------- */
 function bar(s) {
@@ -110,91 +132,115 @@ function bar(s) {
 const chips = s => `<div class="chips"><span class="chip">${s.total} cartes</span><span class="chip g">✓ ${s.known}</span><span class="chip r">✗ ${s.unknown}</span><span class="chip">○ ${s.new}</span>${s.flag ? `<span class="chip f">🚩 ${s.flag}</span>` : ''}</div>`;
 function deckBox(d) {
   const s = stats(d.id);
-  return `<div class="box deck" data-a="open" data-id="${d.id}"><b>${esc(d.name)}</b>
-    ${chips(s)}${bar(s)}</div>`;
+  return `<div class="box deck" data-a="open" data-id="${d.id}"><b>${esc(d.name)}</b>${chips(s)}${bar(s)}</div>`;
 }
 function folderBox(f) {
   const ds = decks().filter(d => d.folderId === f.id);
   const s = sumStats(ds);
   const closed = state.closedFolders.has(f.id);
   return `<div class="box folder">
-    <div class="cl" data-a="togglefolder" data-id="${f.id}" style="cursor:pointer">
-      <div style="flex:1"><b>📁 ${esc(f.name)}</b> <span class="mut">· ${ds.length} paquet(s)</span>${chips(s)}</div>
+    <div class="fhead" data-a="togglefolder" data-id="${f.id}">
+      <div class="grow"><b>📁 ${esc(f.name)}</b> <span class="mut">· ${ds.length} paquet(s)</span>${chips(s)}</div>
       <span class="fold-ico">${closed ? '▸' : '▾'}</span>
     </div>
-    <div class="bar" style="margin:6px 0 0">
-      <button class="pri" data-a="foldstudy" data-id="${f.id}" data-mode="new" ${s.new ? '' : 'disabled'}>▶ Continuer le tri (${s.new})</button>
-      <button class="ko" data-a="foldstudy" data-id="${f.id}" data-mode="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
-      <button data-a="foldstudy" data-id="${f.id}" data-mode="all" ${s.total ? '' : 'disabled'}>Tout réviser le classeur</button>
-      <button data-a="foldstudy" data-id="${f.id}" data-mode="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
-    <div class="bar" style="margin:6px 0 0"><button data-a="renamefolder" data-id="${f.id}">✏️ Renommer</button><button class="danger" data-a="delfolder" data-id="${f.id}">🗑️ Supprimer</button></div>
+    <div class="bar" style="margin:10px 0 0"><button class="pri sm" data-a="studymenu" data-id="f:${f.id}" ${s.total ? '' : 'disabled'}>▶ Réviser</button><span class="sp"></span><button class="ib" data-a="foldermenu" data-id="${f.id}" title="Options">⋯</button></div>
     ${closed ? '' : `<div style="margin-top:10px;display:grid;gap:10px">${ds.map(deckBox).join('') || '<p class="mut">Classeur vide. Ouvre un paquet et choisis ce classeur.</p>'}</div>`}
   </div>`;
 }
+function searchResults() {
+  const rs = Object.values(db.cards).filter(c => !c.deleted && db.decks[c.deckId] && !db.decks[c.deckId].deleted && matches(c, state.gsearch));
+  if (!rs.length) return '<p class="mut" style="text-align:center;padding:24px 0">Aucune carte trouvée.</p>';
+  return `<p class="mut">${rs.length} résultat(s)</p>` + rs.slice(0, 100).map(c =>
+    `<div class="crow" data-a="gopen" data-id="${c.id}"><span class="dot ${c.status}"></span><div class="math grow"><div class="mut" style="font-size:.78rem">${esc(db.decks[c.deckId].name)}</div><b>${fmt(c.q)}</b><div class="ans-line">${fmt(c.a)}</div></div></div>`).join('')
+    + (rs.length > 100 ? '<p class="mut">… affine ta recherche pour voir la suite.</p>' : '');
+}
+function homeBody() {
+  if (state.gsearch.trim()) return searchResults();
+  const noFolder = decks().filter(d => !d.folderId || !db.folders[d.folderId] || db.folders[d.folderId].deleted);
+  const list = folders().map(folderBox).join('') + noFolder.map(deckBox).join('');
+  return list || '<div class="empty"><div class="big">🌱</div><p class="mut">Aucun paquet pour l\'instant.<br>Appuie sur ＋ pour en créer un ou importer des cartes.</p></div>';
+}
+function visibleCards() {
+  let cs = cardsOf(state.deckId);
+  if (state.filter !== 'all') cs = cs.filter(c => state.filter === 'flag' ? c.flag : c.status === state.filter);
+  return cs.filter(c => matches(c, state.search));
+}
+function cardList() {
+  const cs = visibleCards();
+  if (!cs.length) return `<p class="mut" style="text-align:center;padding:24px 0">${state.search || state.filter !== 'all' ? 'Aucune carte trouvée.' : 'Aucune carte pour l\'instant.'}</p>`;
+  return cs.map(c => `<div class="crow${state.sel.has(c.id) ? ' on' : ''}" data-a="rowtap" data-id="${c.id}">${state.selMode ? `<span class="chk">${state.sel.has(c.id) ? '☑' : '☐'}</span>` : `<span class="dot ${c.status}"></span>`}<div class="math grow"><b>${fmt(c.q)}</b><div class="ans-line">${fmt(c.a)}</div></div>${c.flag ? '<span class="flg">🚩</span>' : ''}</div>`).join('');
+}
+function selBarHTML() {
+  if (!state.selMode) return '';
+  const n = state.sel.size;
+  return `<div class="selbar"><button class="ib" data-a="selcancel" title="Annuler">✕</button><b class="grow">${n} sélectionnée(s)</b><button class="sm" data-a="selall">Tout</button><button class="ko sm" data-a="seldel" ${n ? '' : 'disabled'}>Supprimer</button></div>`;
+}
+function refreshDeckList() {
+  const l = $('cardlist'), sb = $('selbar');
+  if (l) l.innerHTML = cardList();
+  if (sb) sb.innerHTML = selBarHTML();
+  typeset();
+}
+function updateCloud() {
+  const c = $('cloudbtn'), r = $('relink');
+  if (c) { c.textContent = cfg.signedIn && state.needLogin ? '⚠️' : '☁️'; c.style.opacity = cfg.signedIn ? 1 : .5; }
+  if (r) r.hidden = !(cfg.signedIn && state.needLogin);
+}
+const scopeStats = (deckId, folderId) => folderId ? sumStats(decks().filter(d => d.folderId === folderId)) : stats(deckId);
+
 const views = {
   home() {
-    const all = decks();
-    const noFolder = all.filter(d => !d.folderId || !db.folders[d.folderId] || db.folders[d.folderId].deleted);
-    const fs = folders();
-    const list = fs.map(folderBox).join('') + noFolder.map(deckBox).join('');
-    return `<div class="hero"><div class="logo"><img src="icon-192.png" alt=""></div><div><h1>Flashcards</h1><div class="mut">${all.length} paquet(s)${cfg.signedIn ? ' · 🔄 synchro auto' : ''}</div></div></div>${!cfg.signedIn && clientId() ? '<div class="banner"><span>☁️ Retrouve tes paquets sur tous tes appareils.</span><button class="pri" data-a="connect">Continuer avec Google</button></div>' : ''}${state.needLogin ? '<div class="banner">Session Google expirée. <button class="pri" data-a="relogin">Se reconnecter</button></div>' : ''}
-      <div class="bar"><button class="pri" data-a="newdeck">+ Nouveau paquet</button><button data-a="newfolder">📁 Nouveau classeur</button><button data-a="import">⬇️ Importer</button><span class="sp"></span><button data-a="settings">☁️ Sync / Sauvegarde</button></div>
-      ${list || '<div class="empty"><div class="big">🌱</div><p class="mut">Aucun paquet pour l\'instant.<br>Crée-en un ou importe des cartes.</p></div>'}`;
+    return `<div class="hero"><div class="logo"><img src="icon-192.png" alt=""></div><div class="grow"><h1>Flashcards</h1><div class="mut">${decks().length} paquet(s)</div></div>
+      <button class="lnk" id="relink" data-a="relogin" hidden>Reconnecter</button><button class="ib bd" id="cloudbtn" data-a="settings" title="Synchronisation"></button></div>
+      ${!cfg.signedIn && clientId() ? '<div class="banner"><span>☁️ Retrouve tes paquets sur tous tes appareils.</span><button class="pri sm" data-a="connect">Se connecter</button></div>' : ''}
+      <input type="search" id="gsearch" class="search" placeholder="🔍 Rechercher une carte…" value="${esc(state.gsearch)}" autocomplete="off">
+      <div id="gres">${homeBody()}</div>
+      <button class="fab" data-a="addmenu" title="Ajouter">+</button>`;
   },
   deck() {
     const d = db.decks[state.deckId]; if (!d) return go('home'), '';
     const s = stats(d.id);
-    let cs = cardsOf(d.id);
-    if (state.filter !== 'all') cs = cs.filter(c => state.filter === 'flag' ? c.flag : c.status === state.filter);
-    const tab = (f, l) => `<button class="${state.filter === f ? 'pri' : ''}" data-a="filter" data-id="${f}">${l}</button>`;
-    const folderSel = `<select data-f="deckFolder">${opt('', '📁 Sans classeur', d.folderId || '')}${folders().map(f => opt(f.id, esc(f.name), d.folderId || '')).join('')}</select>`;
-    return `<div class="bar"><button data-a="home">← Retour</button><span class="sp"></span><button data-a="rename">✏️ Renommer</button><button class="danger" data-a="deldeck">🗑️</button></div>
+    return `<div class="topbar"><button class="ib" data-a="home" title="Retour">←</button><span class="sp"></span><button class="ib" data-a="deckmenu" title="Options">⋯</button></div>
       <h1>${esc(d.name)}</h1>
       <div class="box">${chips(s)}${bar(s)}
-        <div class="bar" style="margin-top:12px">
-          <button class="pri" data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>▶ Continuer le tri (${s.new})</button>
-          <button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir « je ne connais pas » (${s.unknown})</button>
-          <button data-a="study" data-id="all" ${s.total ? '' : 'disabled'}>Tout réviser</button>
-          <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button></div>
-        <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:0"><input type="checkbox" data-a="shuffle" ${state.shuffle ? 'checked' : ''}> Mélanger</label>
-        <label style="font-weight:400;display:flex;gap:8px;align-items:center;margin:6px 0 0"><input type="checkbox" data-a="autoflag" ${cfg.autoFlag !== false ? 'checked' : ''}> 🚩 Marquer automatiquement mes erreurs</label>
-        <div class="row" style="margin:10px 0 0;align-items:center"><div class="bar" style="margin:0"><button data-a="reset">↺ Réinitialiser le tri</button><button data-a="import" data-id="${d.id}">⬇️ Importer dans ce paquet</button></div>${folderSel}</div></div>
-      <div class="bar"><button class="pri" data-a="addcard">+ Ajouter une carte</button><span class="sp"></span></div>
-      <div class="bar tabs">${tab('all', 'Toutes')}${tab('new', '⚪ Non triées')}${tab('unknown', '❌ À revoir')}${tab('known', '✅ Connues')}${tab('flag', '🚩 Marquées')}</div>
-      ${cs.map(c => `<div class="box"><div class="cl"><span class="dot ${c.status}"></span><div class="math"><b>${fmt(c.q)}</b><br>${fmt(c.a)}</div>
-        <button data-a="flagcard" data-id="${c.id}" title="Marquer / démarquer">${c.flag ? '🚩' : '⚐'}</button><button data-a="editcard" data-id="${c.id}">✏️</button></div></div>`).join('') || '<p class="mut">Rien ici.</p>'}`;
+        <div class="bar" style="margin:14px 0 0"><button class="pri grow" data-a="studymenu" data-id="d:${d.id}" ${s.total ? '' : 'disabled'}>▶ Réviser</button><button data-a="addcard">+ Carte</button></div></div>
+      <div class="toolrow"><input type="search" id="dsearch" class="search" placeholder="🔍 Rechercher…" value="${esc(state.search)}" autocomplete="off">
+        <select data-f="filter">${opt('all', 'Toutes', state.filter)}${opt('new', 'Non triées', state.filter)}${opt('unknown', 'À revoir', state.filter)}${opt('known', 'Connues', state.filter)}${opt('flag', '🚩 Marquées', state.filter)}</select>
+        <button class="ib" data-a="selmode" title="Sélectionner plusieurs cartes">☑</button></div>
+      <div id="selbar">${selBarHTML()}</div>
+      <div id="cardlist">${cardList()}</div>`;
   },
   edit() {
     const c = state.editId ? db.cards[state.editId] : null;
     const fresh = !c && state.editFrom !== 'study';
-    return `<h1>${c ? 'Modifier' : 'Nouvelle'} carte</h1>
-      ${fresh && state.addCount ? `<p class="mut">✅ ${state.addCount} carte(s) ajoutée(s) cette session.</p>` : ''}
+    return `<div class="topbar"><button class="ib" data-a="canceledit" title="Retour">←</button><b class="ttl">${c ? 'Modifier la carte' : 'Nouvelle carte'}</b><span class="sp"></span>
+        ${c ? `<button class="ib" data-a="flagedit" title="Marquer">${c.flag ? '🚩' : '⚐'}</button><button class="ib danger" data-a="delcard" title="Supprimer">🗑</button>` : ''}</div>
+      ${fresh && state.addCount ? `<p class="mut">✅ ${state.addCount} carte(s) ajoutée(s) — continue ou reviens avec ←</p>` : ''}
       ${latexToolbar()}
       <label>Question</label><textarea id="eq" placeholder="Texte + LaTeX, ex : dérivée de $x^2$ ?">${esc(c ? c.q : '')}</textarea>
       <label>Réponse</label><textarea id="ea" placeholder="ex : $2x$">${esc(c ? c.a : '')}</textarea>
       <label>Aperçu</label><div class="box math" id="epv"></div>
-      <div class="bar">${fresh
-        ? `<button class="pri" data-a="savecard">Enregistrer et ajouter une autre</button><button data-a="canceledit">Terminer</button>`
-        : `<button class="pri" data-a="savecard">Enregistrer</button><button data-a="canceledit">Annuler</button><span class="sp"></span>${c ? '<button class="danger" data-a="delcard">Supprimer</button>' : ''}`}</div>`;
+      <div class="bar"><button class="pri grow" data-a="savecard">${fresh ? 'Ajouter la carte' : 'Enregistrer'}</button></div>`;
   },
   study() {
     const st = state.study;
     const scopeName = st.folderId ? `📁 ${esc((db.folders[st.folderId] || {}).name || '')}` : esc((db.decks[st.deckId] || {}).name || '');
     if (st.i >= st.queue.length) {
       const k = Object.values(st.res).filter(x => x === 'known').length, u = Object.values(st.res).filter(x => x === 'unknown').length;
-      const s = st.folderId ? sumStats(decks().filter(d => d.folderId === st.folderId)) : stats(st.deckId);
-      return `<h1>Session terminée 🎉</h1><div class="box">✅ Connues : <b>${k}</b><br>❌ À revoir : <b>${u}</b><br><span class="mut">Le tri est sauvegardé.</span></div>
-        <div class="bar"><button class="ko" data-a="study" data-id="unknown" ${s.unknown ? '' : 'disabled'}>🔁 Revoir les « je ne connais pas » (${s.unknown})</button>
-        <button data-a="study" data-id="new" ${s.new ? '' : 'disabled'}>Continuer le tri (${s.new})</button>
-        <button data-a="study" data-id="flag" ${s.flag ? '' : 'disabled'}>🚩 Revoir les marquées (${s.flag})</button><button data-a="studyback">Retour</button></div>`;
+      const s = scopeStats(st.deckId, st.folderId);
+      const done = st.mode === 'unknown' && !s.unknown;
+      return `<h1>${done ? 'Bravo, plus rien à revoir 🎉' : 'Session terminée 🎉'}</h1>
+        <div class="box">✅ Connues : <b>${k}</b>${u ? `<br>❌ À revoir : <b>${u}</b>` : ''}${st.round > 1 ? `<br><span class="mut">${st.round} tours</span>` : ''}</div>
+        <div class="bar">${s.unknown ? `<button class="ko grow" data-a="restudy" data-id="unknown">🔁 Revoir « je ne connais pas » (${s.unknown})</button>` : ''}
+        ${s.new ? `<button class="grow" data-a="restudy" data-id="new">Continuer le tri (${s.new})</button>` : ''}<button class="${s.unknown || s.new ? '' : 'pri grow'}" data-a="studyback">Retour</button></div>`;
     }
     const c = db.cards[st.queue[st.i]];
-    return `<div class="bar"><button data-a="studyback">✕ Quitter</button><span class="sp"></span><span class="mut">${scopeName} · ${st.i + 1}/${st.queue.length}</span></div>
+    return `<div class="topbar"><button class="ib" data-a="studyback" title="Quitter">✕</button><span class="mut grow" style="text-align:center">${scopeName} · ${st.i + 1}/${st.queue.length}${st.round > 1 ? ` · tour ${st.round}` : ''}</span>
+        <button class="ib" data-a="back" title="Carte précédente" ${st.i ? '' : 'disabled'}>↩</button><button class="ib" data-a="flagstudy" title="Marquer (F)">${c.flag ? '🚩' : '⚐'}</button><button class="ib" data-a="editstudy" title="Modifier">✏️</button></div>
       <div class="prog" style="margin:0 0 12px"><i class="g" style="width:${st.i / st.queue.length * 100}%"></i></div>
-      <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}${c.flag ? ' 🚩' : ''}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
+      <div class="box fc math" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
       ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
-        : `<div class="ans"><button class="pri" data-a="flip">Retourner (espace)</button></div>`}
-      <div class="bar" style="margin-top:12px"><button data-a="back" ${st.i ? '' : 'disabled'}>↩ Précédente</button><button data-a="flagstudy">${c.flag ? '🚩 Marquée' : '⚐ Marquer'}</button><button data-a="editstudy">✏️ Modifier cette carte</button><span class="sp"></span><span class="mut">← à revoir · → connue · F marquer</span></div>`;
+        : `<div class="ans"><button class="pri" data-a="flip">Retourner</button></div>`}`;
   },
   import() {
     const i = state.imp;
@@ -215,7 +261,7 @@ const views = {
       <label>Réponse</label><textarea id="ma" placeholder="ex : $2x$"></textarea>
       <label>Aperçu</label><div class="box math" id="mpv"></div>
       <button class="pri" data-a="addmanual">+ Ajouter cette carte</button>`;
-    return `<div class="bar"><button data-a="${state.deckId ? 'opendeck' : 'home'}">← Retour</button></div><h1>Importer des cartes</h1>
+    return `<div class="topbar"><button class="ib" data-a="${state.impFrom === 'deck' ? 'opendeck' : 'home'}" title="Retour">←</button><b class="ttl">Importer des cartes</b></div>
       <div class="bar tabs"><button class="${i.tab === 'csv' ? 'on' : ''}" data-a="imptab" data-id="csv">📄 Fichier CSV</button><button class="${i.tab === 'paste' ? 'on' : ''}" data-a="imptab" data-id="paste">📋 Copier-coller</button><button class="${i.tab === 'manual' ? 'on' : ''}" data-a="imptab" data-id="manual">✍️ Carte par carte</button></div>
       <div class="box">${target}${i.tab === 'csv' ? csv : i.tab === 'paste' ? paste : manual}</div>
       ${i.tab !== 'manual' ? `<div class="box"><b id="impcount"></b><div class="pv math" id="imppv"></div></div>
@@ -223,12 +269,13 @@ const views = {
   },
   settings() {
     const need = !clientId();
-    return `<div class="bar"><button data-a="home">← Retour</button></div><h1>☁️ Synchronisation</h1>
-      <div class="box"><p>Connecte-toi avec ton compte Google : tes paquets sont stockés dans ton propre Google Drive (dossier caché de l'app) et se synchronisent automatiquement sur tous tes appareils connectés au même compte — après chaque modification, à l'ouverture, quand tu reviens sur l'app et toutes les 90 secondes tant qu'elle est ouverte.</p>
-      ${cfg.signedIn ? `<div class="bar"><button class="pri" data-a="sync">🔄 Synchroniser maintenant</button><button data-a="unlink">Se déconnecter</button></div>`
+    return `<div class="topbar"><button class="ib" data-a="home" title="Retour">←</button><b class="ttl">Synchronisation</b></div>
+      <div class="box"><p style="margin-top:0">Connecte-toi avec ton compte Google : tes paquets sont stockés dans ton propre Google Drive (dossier caché de l'app) et se synchronisent automatiquement sur tous tes appareils connectés au même compte.</p>
+      ${cfg.signedIn ? `<p>✅ Connecté${cfg.email ? ' : <b>' + esc(cfg.email) + '</b>' : ''}</p><div class="bar">${state.needLogin ? '<button class="pri" data-a="relogin">Se reconnecter</button>' : '<button class="pri" data-a="sync">🔄 Synchroniser maintenant</button>'}<button data-a="unlink">Se déconnecter</button></div>`
         : `<div class="bar"><button class="pri" data-a="connect">Se connecter avec Google</button></div>`}
       <div class="mut" id="syncmsg">${esc(state.msg || (cfg.last ? 'Dernière synchro : ' + new Date(cfg.last).toLocaleString() : ''))}</div></div>
-      <details class="box" ${need ? 'open' : ''}><summary><b>Configuration Google (une seule fois)</b></summary>
+      <details class="box" ${need ? 'open' : ''}><summary><b>Configuration Google & rester connecté</b></summary>
+        <p class="mut"><b>💡 Pour ne jamais être déconnecté :</b> dans la console Google Cloud → <i>Google Auth Platform</i> → <i>Audience</i>, clique sur <b>« Publier l'application »</b>. Tant que l'app est en mode « Test », Google coupe l'accès toutes les semaines.</p>
         <ol class="mut"><li>Va sur console.cloud.google.com → crée un projet.</li>
         <li>« API et services » → « Bibliothèque » → active <b>Google Drive API</b>.</li>
         <li>« Écran de consentement OAuth » → Externe → ajoute ton adresse Gmail comme utilisateur test.</li>
@@ -240,8 +287,9 @@ const views = {
 };
 function render() {
   $app.innerHTML = views[state.view]();
+  if (state.view === 'home') updateCloud();
   if (state.view === 'import') { if (state.imp.tab === 'manual') updateManualPv(); else updatePreview(); }
-  if (state.view === 'edit') { updateEditPv(); const el = document.getElementById(state.lastField === 'ea' ? 'ea' : 'eq'); if (el && !state.editId) el.focus(); }
+  if (state.view === 'edit') { updateEditPv(); const el = $(state.lastField === 'ea' ? 'ea' : 'eq'); if (el && !state.editId) el.focus(); }
   typeset();
 }
 
@@ -283,15 +331,16 @@ function getRows() {
 }
 function updatePreview() {
   const r = getRows();
-  document.getElementById('impcount').textContent = `${r.length} carte(s) détectée(s)`;
-  document.getElementById('imppv').innerHTML = r.slice(0, 5).map(x => `Q : ${fmt(x[0])}\nR : ${fmt(x[1])}`).join('\n──────\n'); typeset();
+  const c = $('impcount'), p = $('imppv'); if (!c || !p) return;
+  c.textContent = `${r.length} carte(s) détectée(s)`;
+  p.innerHTML = r.slice(0, 5).map(x => `Q : ${fmt(x[0])}\nR : ${fmt(x[1])}`).join('\n──────\n'); typeset();
 }
 function updateEditPv() {
-  const q = document.getElementById('eq'), a = document.getElementById('ea'), p = document.getElementById('epv');
+  const q = $('eq'), a = $('ea'), p = $('epv');
   if (!q) return; p.innerHTML = fmt(q.value) + '\n\n' + fmt(a.value); p.style.whiteSpace = 'pre-wrap'; typeset();
 }
 function updateManualPv() {
-  const q = document.getElementById('mq'), a = document.getElementById('ma'), p = document.getElementById('mpv');
+  const q = $('mq'), a = $('ma'), p = $('mpv');
   if (!q) return; p.innerHTML = fmt(q.value) + '\n\n' + fmt(a.value); p.style.whiteSpace = 'pre-wrap'; typeset();
 }
 async function readFile(f) {
@@ -302,18 +351,23 @@ async function readFile(f) {
 }
 
 /* ---------- étude ---------- */
-function studyCardsBase() {
-  if (state.studyFolderId) {
-    const ids = decks().filter(d => d.folderId === state.studyFolderId).map(d => d.id);
+function scopeCards(deckId, folderId) {
+  if (folderId) {
+    const ids = decks().filter(d => d.folderId === folderId).map(d => d.id);
     return Object.values(db.cards).filter(c => !c.deleted && ids.includes(c.deckId));
   }
-  return cardsOf(state.deckId);
+  return cardsOf(deckId);
 }
-function startStudy(mode) {
-  let cs = studyCardsBase().filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
+const pick = (cs, mode) => cs.filter(c => mode === 'all' || (mode === 'flag' ? c.flag : c.status === mode));
+function order(cs) {
+  cs = cs.slice();
   if (state.shuffle) for (let i = cs.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cs[i], cs[j]] = [cs[j], cs[i]]; }
+  return cs;
+}
+function startStudy(mode, deckId, folderId) {
+  const cs = order(pick(scopeCards(deckId, folderId), mode));
   if (!cs.length) return;
-  state.study = { deckId: state.deckId, folderId: state.studyFolderId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode };
+  state.study = { deckId, folderId, queue: cs.map(c => c.id), i: 0, flip: false, res: {}, mode, round: 1 };
   go('study');
 }
 function answer(k) {
@@ -322,7 +376,13 @@ function answer(k) {
   if (k === 'unknown' && cfg.autoFlag !== false) c.flag = true;
   else if (k === 'known' && st.mode === 'flag') c.flag = false;
   save();
-  st.i++; st.flip = false; render();
+  st.i++; st.flip = false;
+  // mode « je ne connais pas » : on recommence un tour tant qu'il en reste
+  if (st.i >= st.queue.length && st.mode === 'unknown') {
+    const rest = order(pick(scopeCards(st.deckId, st.folderId), 'unknown'));
+    if (rest.length) { st.queue = rest.map(x => x.id); st.i = 0; st.round++; }
+  }
+  render();
 }
 
 /* ---------- synchro (Google Drive) ---------- */
@@ -336,8 +396,8 @@ function merge(a, b) {
 }
 const GOOGLE_CLIENT_ID = '357404140201-h93hvb0gqv6us3fvetc3tfj7p3fj7vce.apps.googleusercontent.com';
 const clientId = () => cfg.clientId || GOOGLE_CLIENT_ID;
-const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-let tok = null, tokExp = 0, gis = null, syncing = false, syncInterval = null;
+const SCOPE = 'https://www.googleapis.com/auth/drive.appdata openid email';
+let tok = null, tokExp = 0, gis = null, syncing = false, syncInterval = null, refreshing = false, nextTry = 0;
 function loadGis() {
   return gis || (gis = new Promise((res, rej) => {
     const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client';
@@ -349,12 +409,20 @@ async function getToken(prompt) {
   if (!clientId()) throw new Error('Client ID Google manquant');
   await loadGis();
   return new Promise((res, rej) => {
-    google.accounts.oauth2.initTokenClient({ client_id: clientId(), scope: SCOPE,
+    const conf = { client_id: clientId(), scope: SCOPE,
       callback: r => { if (r.error) return rej(new Error(r.error)); tok = r.access_token; tokExp = now() + r.expires_in * 1000; res(tok); },
-      error_callback: e => rej(new Error(e.type || 'Connexion annulée')) }).requestAccessToken({ prompt });
+      error_callback: e => rej(new Error(e.type || 'Connexion annulée')) };
+    if (cfg.email) conf.hint = cfg.email;   // évite le choix de compte quand plusieurs comptes Google sont ouverts
+    google.accounts.oauth2.initTokenClient(conf).requestAccessToken({ prompt });
   });
 }
-const setMsg = m => { state.msg = m; const e = document.getElementById('syncmsg'); if (e) e.textContent = m; };
+async function learnEmail() {
+  try {
+    const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: 'Bearer ' + tok } });
+    if (r.ok) { const j = await r.json(); if (j.email) { cfg.email = j.email; saveCfg(); } }
+  } catch (e) {}
+}
+const setMsg = m => { state.msg = m; const e = $('syncmsg'); if (e) e.textContent = m; };
 async function drive(path, opt = {}, upload = false) {
   const r = await fetch('https://www.googleapis.com/' + (upload ? 'upload/' : '') + 'drive/v3/' + path, { ...opt, headers: { Authorization: 'Bearer ' + tok, ...(opt.headers || {}) } });
   if (r.status === 401) { tok = null; throw new Error('Session expirée'); }
@@ -368,11 +436,14 @@ async function doSync(auto, prompt = 'none') {
   try {
     setMsg('Synchronisation…');
     await getToken(auto ? 'none' : prompt);
+    if (!cfg.email) learnEmail();
     const list = await (await drive("files?spaces=appDataFolder&q=name%3D'flashcards.json'&fields=files(id)")).json();
     const id = list.files[0] && list.files[0].id;
     let remote = { decks: {}, cards: {}, folders: {} };
     if (id) { try { remote = await (await drive('files/' + id + '?alt=media')).json(); } catch (e) {} }
+    const before = JSON.stringify(db);
     db = merge(db, remote); save(false);
+    const changed = JSON.stringify(db) !== before;
     const body = JSON.stringify(db);
     if (body !== JSON.stringify(merge(remote, remote))) {
       if (id) await drive('files/' + id + '?uploadType=media', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body }, true);
@@ -384,11 +455,14 @@ async function doSync(auto, prompt = 'none') {
     }
     cfg.last = now(); state.needLogin = false; saveCfg();
     setMsg('✅ Synchronisé à ' + new Date().toLocaleTimeString());
-    if (state.view === 'home' || state.view === 'deck') render();
+    updateCloud();
+    // ne rafraîchit l'écran que si ça ne gêne pas (pas de saisie ni de sélection en cours)
+    const busy = state.selMode || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
+    if (changed && !busy && (state.view === 'home' || state.view === 'deck')) render();
   } catch (e) {
     if (auto) state.needLogin = true;
-    setMsg('⚠️ ' + e.message + (auto ? ' — clique sur « Se reconnecter »' : ''));
-    if (auto && state.view === 'home') render();
+    setMsg('⚠️ ' + e.message + (auto ? ' — touche l\'écran pour te reconnecter' : ''));
+    updateCloud();
   }
   syncing = false;
 }
@@ -396,14 +470,59 @@ function startAutoSyncLoop() {
   clearInterval(syncInterval);
   syncInterval = setInterval(() => { if (cfg.signedIn && !document.hidden && state.view !== 'study') doSync(true); }, 90000);
 }
+// Reste connecté : le jeton Google dure 1 h et ne peut être renouvelé qu'à l'occasion d'un geste de l'utilisateur
+// (sinon le navigateur bloque la fenêtre). On le renouvelle donc discrètement au premier toucher/clic qui suit.
+function silentRefresh() {
+  if (!cfg.signedIn || refreshing || syncing) return;
+  if (tok && now() < tokExp - 120000) return;
+  if (now() < nextTry) return;
+  refreshing = true; nextTry = now() + 60000;
+  getToken('none').then(() => { state.needLogin = false; updateCloud(); doSync(true); })
+    .catch(() => { state.needLogin = true; updateCloud(); })
+    .finally(() => { refreshing = false; });
+}
+document.addEventListener('pointerdown', silentRefresh, { capture: true });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && cfg.signedIn && state.view !== 'study') doSync(true); });
 window.addEventListener('online', () => { if (cfg.signedIn) doSync(true); });
 
 /* ---------- événements ---------- */
 const A = {
-  home: () => go('home'), settings: () => go('settings'),
-  newdeck() { const n = prompt('Nom du paquet ?'); if (!n) return; const id = uid(); db.decks[id] = { id, name: n.trim(), folderId: null, updatedAt: now() }; save(); go('deck', { deckId: id, filter: 'all' }); },
-  open: id => { state.studyFolderId = null; go('deck', { deckId: id, filter: 'all' }); },
+  home: () => go('home', { gsearch: '' }), settings: () => go('settings'), closesheet: () => closeSheet(),
+  addmenu() { showSheet('Ajouter', srow('🗂️ Nouveau paquet', '', 'data-a="newdeck"') + srow('📁 Nouveau classeur', '', 'data-a="newfolder"') + srow('⬇️ Importer des cartes', '', 'data-a="importhome"')); },
+  studymenu(id) {
+    const folder = id.startsWith('f:'), ref = id.slice(2);
+    const s = folder ? sumStats(decks().filter(d => d.folderId === ref)) : stats(ref);
+    const nm = folder ? (db.folders[ref] || {}).name : (db.decks[ref] || {}).name;
+    const at = mode => folder ? `data-a="foldstudy" data-id="${ref}" data-mode="${mode}"` : `data-a="study" data-id="${mode}"`;
+    let rows = '';
+    if (s.new) rows += srow('▶ Continuer le tri', s.new, at('new'));
+    if (s.unknown) rows += srow('🔁 Revoir « je ne connais pas » en boucle', s.unknown, at('unknown'));
+    if (s.flag) rows += srow('🚩 Cartes marquées', s.flag, at('flag'));
+    rows += srow('📚 Tout réviser', s.total, at('all'));
+    showSheet('Réviser · ' + (nm || ''), rows);
+  },
+  deckmenu() {
+    const d = db.decks[state.deckId];
+    showSheet(d.name,
+      srow('✏️ Renommer', '', 'data-a="rename"') +
+      srow('⬇️ Importer dans ce paquet', '', `data-a="import" data-id="${d.id}"`) +
+      srow('☑ Sélectionner des cartes', '', 'data-a="selmode"') +
+      `<div class="srow static"><span>📁 Classeur</span><select data-f="deckFolder">${opt('', 'Aucun', d.folderId || '')}${folders().map(f => opt(f.id, esc(f.name), d.folderId || '')).join('')}</select></div>` +
+      `<label class="srow static" style="margin:0"><span>🔀 Mélanger les cartes</span><input type="checkbox" data-a="shuffle" ${state.shuffle ? 'checked' : ''}></label>` +
+      `<label class="srow static" style="margin:0"><span>🚩 Marquer mes erreurs auto.</span><input type="checkbox" data-a="autoflag" ${cfg.autoFlag !== false ? 'checked' : ''}></label>` +
+      srow('↺ Réinitialiser le tri', '', 'data-a="reset"') +
+      srow('🗑 Supprimer le paquet', '', 'data-a="deldeck"', 'danger'));
+  },
+  foldermenu(id) {
+    const f = db.folders[id];
+    showSheet('📁 ' + f.name, srow('✏️ Renommer', '', `data-a="renamefolder" data-id="${id}"`) + srow('🗑 Supprimer le classeur', '', `data-a="delfolder" data-id="${id}"`, 'danger'));
+  },
+  latexmenu() {
+    showSheet('Formules LaTeX', `<div class="sgrid">${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`);
+  },
+  newdeck() { const n = prompt('Nom du paquet ?'); if (!n) return; const id = uid(); db.decks[id] = { id, name: n.trim(), folderId: null, updatedAt: now() }; save(); go('deck', { deckId: id, filter: 'all', search: '' }); },
+  open: id => go('deck', { deckId: id, filter: 'all', search: '' }),
+  gopen(id) { const c = db.cards[id]; go('deck', { deckId: c.deckId, filter: 'all', search: state.gsearch.trim() }); },
   opendeck: () => go('deck'),
   studyback() { const st = state.study; go(st && st.folderId ? 'home' : 'deck'); },
   rename() { const d = db.decks[state.deckId]; const n = prompt('Nouveau nom ?', d.name); if (n) { d.name = n.trim(); touch(d); save(); render(); } },
@@ -421,20 +540,46 @@ const A = {
     save(); render();
   },
   togglefolder(id) { if (state.closedFolders.has(id)) state.closedFolders.delete(id); else state.closedFolders.add(id); render(); },
-  filter: id => go('deck', { filter: id }),
   shuffle(id, el) { state.shuffle = el.checked; },
-  study: id => { state.studyFolderId = null; startStudy(id); },
-  foldstudy(folderId, t) { state.studyFolderId = folderId; state.deckId = null; startStudy(t.dataset.mode); },
+  study: mode => startStudy(mode, state.deckId, null),
+  foldstudy(folderId, t) { startStudy(t.dataset.mode, null, folderId); },
+  restudy(mode) { const st = state.study; startStudy(mode, st.deckId, st.folderId); },
   reset() { if (!confirm('Remettre toutes les cartes en « non triées » ?')) return; cardsOf(state.deckId).forEach(c => { c.status = 'new'; touch(c); }); save(); render(); },
-  flagcard(id) { const c = db.cards[id]; c.flag = !c.flag; touch(c); save(); render(); },
+  // sélection multiple
+  rowtap(id) {
+    if (!state.selMode) return go('edit', { editId: id, editFrom: null });
+    if (state.sel.has(id)) state.sel.delete(id); else state.sel.add(id);
+    refreshDeckList();
+  },
+  selmode() { state.selMode = !state.selMode; state.sel = new Set(); refreshDeckList(); },
+  selcancel() { state.selMode = false; state.sel = new Set(); refreshDeckList(); },
+  selall() {
+    const ids = visibleCards().map(c => c.id);
+    state.sel = ids.every(i => state.sel.has(i)) ? new Set() : new Set(ids);
+    refreshDeckList();
+  },
+  seldel() {
+    const n = state.sel.size; if (!n) return;
+    if (!confirm(`Supprimer ${n} carte${n > 1 ? 's' : ''} ?`)) return;
+    state.sel.forEach(id => { const c = db.cards[id]; if (c) { c.deleted = true; touch(c); } });
+    save(); state.selMode = false; state.sel = new Set(); render();
+  },
   flagstudy() { const st = state.study, c = db.cards[st.queue[st.i]]; c.flag = !c.flag; touch(c); save(); render(); },
+  flagedit(id, t) { const c = db.cards[state.editId]; c.flag = !c.flag; touch(c); save(); t.textContent = c.flag ? '🚩' : '⚐'; },
   addcard: () => go('edit', { editId: null, editFrom: null, addCount: 0 }),
-  editcard: id => go('edit', { editId: id, editFrom: null }),
   editstudy() { const st = state.study; go('edit', { editId: st.queue[st.i], editFrom: 'study' }); },
-  canceledit: () => go(state.editFrom === 'study' ? 'study' : 'deck'),
+  canceledit() {
+    const q = $('eq'), a = $('ea');
+    if (q && a) {
+      const c = state.editId ? db.cards[state.editId] : null;
+      const dirty = c ? (q.value.trim() !== c.q || a.value.trim() !== c.a) : !!(q.value.trim() || a.value.trim());
+      if (dirty && !confirm('Quitter sans enregistrer ?')) return;
+    }
+    go(state.editFrom === 'study' ? 'study' : 'deck');
+  },
   latex: id => insertSnippet(id),
   savecard() {
-    const q = document.getElementById('eq').value.trim(), a = document.getElementById('ea').value.trim();
+    const q = $('eq').value.trim(), a = $('ea').value.trim();
     if (!q || !a) return alert('Question et réponse requises.');
     if (state.editId) {
       const c = db.cards[state.editId]; c.q = q; c.a = a; touch(c); save();
@@ -449,11 +594,12 @@ const A = {
   flip() { state.study.flip = !state.study.flip; render(); },
   ans: id => answer(id),
   back() { const st = state.study; if (st.i > 0) { st.i--; st.flip = false; render(); } },
-  import(id) { state.imp.deckId = id || state.deckId || ''; state.imp.text = ''; state.imp.addCount = 0; go('import'); },
+  import(id) { Object.assign(state.imp, { deckId: id || '', text: '', addCount: 0 }); state.impFrom = 'deck'; go('import'); },
+  importhome() { Object.assign(state.imp, { deckId: '', text: '', addCount: 0 }); state.impFrom = 'home'; go('import'); },
   imptab(id) { state.imp.tab = id; state.imp.text = ''; if (id === 'manual') state.lastField = 'mq'; if (id === 'paste') state.lastField = 'ptext'; render(); },
   addmanual() {
     const i = state.imp;
-    const q = document.getElementById('mq').value.trim(), a = document.getElementById('ma').value.trim();
+    const q = $('mq').value.trim(), a = $('ma').value.trim();
     if (!q || !a) return alert('Question et réponse requises.');
     let deckId = i.deckId;
     if (!deckId) {
@@ -475,15 +621,17 @@ const A = {
     }
     rows.forEach(r => addCard(deckId, r[0], r[1]));
     save(); alert(rows.length + ' cartes importées.');
-    go('deck', { deckId, filter: 'all' });
+    go('deck', { deckId, filter: 'all', search: '' });
   },
   async connect() {
-    const c = document.getElementById('cid'); if (c) { cfg.clientId = c.value.trim(); saveCfg(); }
+    const c = $('cid'); if (c) { cfg.clientId = c.value.trim(); saveCfg(); }
     try { await getToken('select_account'); cfg.signedIn = true; saveCfg(); startAutoSyncLoop(); await doSync(false); } catch (e) { setMsg('⚠️ ' + e.message); }
   },
-  async relogin() { try { await getToken(''); state.needLogin = false; await doSync(false); render(); } catch (e) { setMsg('⚠️ ' + e.message); } },
+  async relogin() {
+    try { await getToken(''); state.needLogin = false; updateCloud(); await doSync(false); if (state.view === 'settings') render(); } catch (e) { setMsg('⚠️ ' + e.message); }
+  },
   sync: () => doSync(false, ''),
-  unlink() { cfg.signedIn = false; cfg.last = ''; tok = null; clearInterval(syncInterval); saveCfg(); state.msg = 'Déconnecté.'; render(); },
+  unlink() { cfg.signedIn = false; cfg.last = ''; cfg.email = ''; tok = null; state.needLogin = false; clearInterval(syncInterval); saveCfg(); state.msg = 'Déconnecté.'; render(); },
   export() {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([JSON.stringify(db)], { type: 'application/json' }));
@@ -492,13 +640,16 @@ const A = {
 };
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-a]'); if (!t || t.tagName === 'INPUT') return;
-  const f = A[t.dataset.a]; if (f) f(t.dataset.id, t);
+  const f = A[t.dataset.a]; if (!f) return;
+  if (t.dataset.a !== 'closesheet' && t.closest('#sheet')) closeSheet();
+  f(t.dataset.id, t);
 });
 document.addEventListener('change', async e => {
   const t = e.target;
   if (t.dataset.a === 'shuffle') return A.shuffle(null, t);
   if (t.dataset.a === 'autoflag') { cfg.autoFlag = t.checked; saveCfg(); return; }
-  if (t.dataset.f === 'deckFolder') { const d = db.decks[state.deckId]; d.folderId = t.value || null; touch(d); save(); render(); return; }
+  if (t.dataset.f === 'deckFolder') { const d = db.decks[state.deckId]; d.folderId = t.value || null; touch(d); save(); closeSheet(); render(); return; }
+  if (t.dataset.f === 'filter') { state.filter = t.value; refreshDeckList(); return; }
   if (t.id === 'csvfile' && t.files[0]) { state.imp.text = await readFile(t.files[0]); updatePreview(); return; }
   if (t.id === 'jsonfile' && t.files[0]) {
     try { db = merge(db, JSON.parse(await readFile(t.files[0]))); save(); alert('Sauvegarde fusionnée.'); go('home'); } catch (err) { alert('Fichier invalide.'); }
@@ -511,14 +662,17 @@ document.addEventListener('change', async e => {
 });
 document.addEventListener('input', e => {
   const t = e.target;
+  if (t.id === 'dsearch') { state.search = t.value; refreshDeckList(); return; }
+  if (t.id === 'gsearch') { state.gsearch = t.value; const g = $('gres'); if (g) { g.innerHTML = homeBody(); typeset(); } return; }
   if (t.dataset.f) { state.imp[t.dataset.f] = t.value; updatePreview(); }
   if (t.id === 'eq' || t.id === 'ea') updateEditPv();
   if (t.id === 'mq' || t.id === 'ma') updateManualPv();
 });
 document.addEventListener('focus', e => { if (FIELD_IDS.includes(e.target.id)) state.lastField = e.target.id; }, true);
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $sheet.innerHTML) { closeSheet(); return; }
   if ((e.ctrlKey || e.metaKey) && FIELD_IDS.includes(e.target.id) && (e.key === 'b' || e.key === 'u')) { e.preventDefault(); state.lastField = e.target.id; insertSnippet(e.key === 'b' ? 'bold' : 'under'); return; }
-  if (state.view !== 'study' || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  if (state.view !== 'study' || $sheet.innerHTML || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
   const st = state.study; if (st.i >= st.queue.length) return;
   if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); A.flip(); }
   else if (e.key === 'ArrowRight' && st.flip) answer('known');
@@ -526,12 +680,6 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'f' || e.key === 'F') A.flagstudy();
 });
 
-// reconnexion automatique : dès le 1er clic/toucher, si la session Google a expiré
-document.addEventListener('pointerdown', async () => {
-  if (!state.needLogin || !cfg.signedIn) return;
-  state.needLogin = false;
-  try { await getToken(''); await doSync(false); } catch (e) { state.needLogin = true; }
-}, { capture: true });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
-if (cfg.signedIn) { doSync(true); startAutoSyncLoop(); }
+if (cfg.signedIn) { loadGis().catch(() => {}); doSync(true); startAutoSyncLoop(); }
