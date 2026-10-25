@@ -1,6 +1,6 @@
 'use strict';
 /* Utilitaires partagés : DOM, texte, dates, mise en forme des cartes */
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '2.1.0';
 const $ = id => document.getElementById(id);
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -31,10 +31,21 @@ const pad2 = n => String(n).padStart(2, '0');
 const dayKey = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const dayNum = k => { const [y, m, d] = k.split('-').map(Number); return Math.round(Date.UTC(y, m - 1, d) / 86400000); };
 
-/* ---------- petits morceaux de HTML ---------- */
+/* ---------- petits morceaux de HTML (composants d'interface) ---------- */
 const opt = (v, l, cur) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${l}</option>`;
-const ib = (icon, label, attrs = '', cls = '') => `<button type="button" class="ib ${cls}" title="${esc(label)}" aria-label="${esc(label)}" ${attrs}>${icon}</button>`;
-const srow = (label, sub, attrs, cls = '') => `<button type="button" class="srow ${cls}" ${attrs}><span>${label}</span>${sub !== '' && sub != null ? `<small>${sub}</small>` : ''}</button>`;
-const setrow = (label, sub, control) => `<label class="setrow"><span>${label}${sub ? `<small>${sub}</small>` : ''}</span>${control}</label>`;
+// bouton de barre de navigation (texte ou icône)
+const nb = (inner, label, attrs = '', cls = '') => `<button type="button" class="nb ${cls}" ${label ? `title="${esc(label)}" aria-label="${esc(label)}"` : ''} ${attrs}>${inner}</button>`;
+const nbi = (name, label, attrs = '', cls = '') => nb(icon(name, 24), label, attrs, 'ic ' + cls);
+const back = (label, action) => nb(icon('chev-l', 26) + `<span>${esc(label)}</span>`, 'Retour', `data-a="${action}"`);
+// barre de navigation : titre centré qui apparaît quand le grand titre sort de l'écran (solid = toujours visible)
+const navbar = ({ left = '', title = '', right = '', solid = false }) => `<header class="nav ${solid ? 'solid' : ''}"><div class="nav-in"><div class="nav-l">${left}</div><div class="nav-t">${esc(title)}</div><div class="nav-r">${right}</div></div></header>`;
+const tile = (name, color = 'g') => `<span class="ico ${color}">${icon(name, 18)}</span>`;
+// ligne d'une feuille d'actions (icône + libellé + valeur facultative)
+const srow = (ic, label, sub, attrs, cls = '') => `<button type="button" class="row srow ${cls}" ${attrs}>${ic ? icon(ic, 22) : ''}<span class="sl">${label}</span>${sub !== '' && sub != null ? `<small>${sub}</small>` : ''}</button>`;
+// ligne de réglage (étiquette cliquable) et ligne d'action
+const setrow = (tl, label, sub, control) => `<label class="row ic">${tl}<span class="rt"><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span>${control}</label>`;
+const setact = (tl, label, sub, control) => `<div class="row ic static">${tl}<span class="rt"><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span>${control}</div>`;
 const switchCtl = (key, on) => `<input type="checkbox" class="sw" role="switch" data-s="${key}" ${on ? 'checked' : ''}>`;
-const setact = (label, sub, ctl) => `<div class="setrow" style="cursor:default"><span>${label}${sub ? `<small>${sub}</small>` : ''}</span>${ctl}</div>`;
+// ligne cliquable avec pastille d'icône et chevron (listes, réglages)
+const navrow = (tl, label, sub, attrs, extra = '', cls = '') => `<button type="button" class="row ic ${cls}" ${attrs}>${tl}<span class="rt"><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span><span class="trail">${extra}${icon('chev-r', 18)}</span></button>`;
+const searchBox = (id, ph, value) => `<div class="search">${icon('search', 18)}<input type="search" id="${id}" aria-label="${esc(ph)}" placeholder="${esc(ph)}" value="${esc(value)}" autocomplete="off"></div>`;

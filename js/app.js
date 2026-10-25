@@ -2,23 +2,40 @@
 /* Actions (boutons), événements globaux et démarrage */
 
 const openDeck = (id, search = '') => go('deck', { deckId: id, filter: 'all', search, limit: 200 });
+const safeName = s => String(s).replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'paquet';
 
 const A = {
   /* navigation */
-  home: () => go('home', { gsearch: '' }), settings: () => go('settings'), stats: () => go('stats'),
+  tab(id) {
+    if (id === 'home' && state.view === 'home') { window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' }); return; }
+    go(id);
+  },
+  home: () => go('home'), settings: () => go('settings'), stats: () => go('stats'),
   closesheet: () => closeSheet(),
   dlgok: () => endDialog($('dlgin') ? $('dlgin').value : true),
   dlgno: () => endDialog(null),
   toastact: (id, t) => toastAct(id, t),
   open: id => openDeck(id),
+  openfolder: id => go('folder', { folderId: id }),
   gopen(id) { const c = db.cards[id]; openDeck(c.deckId, state.gsearch.trim()); },
   opendeck: () => go('deck'),
-  studyback() { const st = state.study; go(st && st.folderId ? 'home' : 'deck'); },
+  deckback() { const d = db.decks[state.deckId], f = d && folderOf(d); if (f) go('folder', { folderId: f.id }); else go('home'); },
+  studyback() {
+    const st = state.study;
+    if (st && st.folderId && st.folderId !== '*' && !goneFolder(db.folders[st.folderId])) go('folder', { folderId: st.folderId });
+    else if (st && st.folderId) go('home');
+    else go(db.decks[state.deckId] ? 'deck' : 'home');
+  },
   more() { state.limit += 200; refreshDeckList(); },
+  setfilter(id, t) {
+    state.filter = id; state.limit = 200;
+    t.parentElement.querySelectorAll('button').forEach(b => { const on = b === t; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+    refreshDeckList();
+  },
 
   /* menus */
   addmenu() {
-    showSheet('Ajouter', srow('🗂️ Nouveau paquet', '', 'data-a="newdeck"') + srow('📁 Nouveau classeur', '', 'data-a="newfolder"') + srow('⬇️ Importer des cartes', '', 'data-a="importhome"'));
+    showSheet('Ajouter', `<div class="list">${srow('layers', 'Nouveau paquet', '', 'data-a="newdeck"')}${srow('folder', 'Nouveau classeur', '', 'data-a="newfolder"')}${srow('download', 'Importer des cartes', '', 'data-a="importhome"')}</div>`);
   },
   studymenu(id) {
     const folder = id.startsWith('f:'), ref = id.slice(2);
@@ -26,38 +43,36 @@ const A = {
     const nm = folder ? (db.folders[ref] || {}).name : (db.decks[ref] || {}).name;
     const at = mode => `data-a="run" data-mode="${mode}" data-scope="${id}"`;
     let rows = '';
-    if (s.new) rows += srow('▶ Continuer le tri', s.new, at('new'));
-    if (s.unknown) rows += srow('🔁 Revoir « je ne connais pas » en boucle', s.unknown, at('unknown'));
-    if (s.flag) rows += srow('🚩 Cartes marquées', s.flag, at('flag'));
-    rows += srow('📚 Tout réviser', s.total, at('all'));
-    if (cfg.game) rows += srow('⚡ Défi éclair · 60 s', '', at('blitz'));
-    rows += '<div class="sdiv"></div>'
-      + `<label class="srow static" style="margin:0"><span>🔀 Mélanger</span>${switchCtl('shuffle', cfg.shuffle !== false)}</label>`
-      + `<label class="srow static" style="margin:0"><span>🎮 Mode jeu</span>${switchCtl('game', !!cfg.game)}</label>`;
-    showSheet('Réviser · ' + (nm || ''), rows, id);
+    if (s.new) rows += srow('play', 'Continuer le tri', s.new, at('new'));
+    if (s.unknown) rows += srow('refresh', 'Revoir « je ne connais pas » en boucle', s.unknown, at('unknown'));
+    if (s.flag) rows += srow('flag', 'Cartes marquées', s.flag, at('flag'));
+    rows += srow('layers', 'Tout réviser', s.total, at('all'));
+    if (cfg.game) rows += srow('bolt', 'Défi éclair · 60 s', '', at('blitz'));
+    showSheet('Réviser · ' + (nm || ''), `<div class="list">${rows}</div>
+      <div class="list"><label class="row static"><span class="sl">Mélanger</span>${switchCtl('shuffle', cfg.shuffle !== false)}</label>
+      <label class="row static"><span class="sl">Mode jeu</span>${switchCtl('game', !!cfg.game)}</label></div>`, id);
+  },
+  studymore() {
+    const st = state.study, c = db.cards[st.queue[st.i]]; if (!c) return;
+    showSheet('Cette carte', `<div class="list">${st.i ? srow('undo', 'Carte précédente', '', 'data-a="back"') : ''}
+      ${srow(c.flag ? 'flag-f' : 'flag', c.flag ? 'Retirer la marque' : 'Marquer cette carte', '', 'data-a="flagstudy"')}${srow('pencil', 'Modifier la carte', '', 'data-a="editstudy"')}</div>`);
   },
   deckmenu() {
     const d = db.decks[state.deckId];
-    showSheet(d.name,
-      srow('✏️ Renommer', '', 'data-a="rename"') +
-      srow('⬇️ Importer dans ce paquet', '', `data-a="import" data-id="${d.id}"`) +
-      srow('☑ Sélectionner des cartes', '', 'data-a="selmode"') +
-      `<div class="srow static"><span>📁 Classeur</span><select data-f="deckFolder" aria-label="Classeur">${opt('', 'Aucun', d.folderId || '')}${folders().map(f => opt(f.id, esc(f.name), d.folderId || '')).join('')}</select></div>` +
-      srow('↺ Réinitialiser le tri', '', 'data-a="reset"') +
-      srow('🗑 Supprimer le paquet', '', 'data-a="deldeck"', 'danger'));
+    showSheet(d.name, `<div class="list">${srow('pencil', 'Renommer', '', 'data-a="rename"')}${srow('check-sq', 'Sélectionner des cartes', '', 'data-a="selmode"')}${srow('download', 'Importer dans ce paquet', '', `data-a="import" data-id="${d.id}"`)}${srow('upload', 'Exporter en CSV', '', 'data-a="exportdeck"')}
+      <div class="row static"><span class="sl">Classeur</span><select data-f="deckFolder" aria-label="Classeur">${opt('', 'Aucun', d.folderId || '')}${folders().map(f => opt(f.id, esc(f.name), d.folderId || '')).join('')}</select></div></div>
+      <div class="list">${srow('undo', 'Réinitialiser le tri', '', 'data-a="reset"')}${srow('trash', 'Supprimer le paquet', '', 'data-a="deldeck"', 'danger')}</div>`);
   },
   foldermenu(id) {
     const f = db.folders[id];
-    showSheet('📁 ' + f.name, srow('✏️ Renommer', '', `data-a="renamefolder" data-id="${id}"`) + srow('🗑 Supprimer le classeur', '', `data-a="delfolder" data-id="${id}"`, 'danger'));
-  },
-  latexmenu() {
-    showSheet('Formules LaTeX', `<div class="sgrid">${LATEX_SNIPPETS.map(x => `<button type="button" data-a="latex" data-id="${x[0]}">${x[1]}</button>`).join('')}</div>`);
+    showSheet(f.name, `<div class="list">${srow('pencil', 'Renommer', '', `data-a="renamefolder" data-id="${id}"`)}${srow('trash', 'Supprimer le classeur', '', `data-a="delfolder" data-id="${id}"`, 'danger')}</div>`);
   },
 
   /* paquets & classeurs */
   async newdeck() {
     const n = await askText('Nouveau paquet', '', 'Nom du paquet'); if (!n) return;
-    const id = uid(); db.decks[id] = { id, name: n, folderId: null, updatedAt: now() }; save(); openDeck(id);
+    const id = uid(), fid = state.view === 'folder' ? state.folderId : null;
+    db.decks[id] = { id, name: n, folderId: fid, updatedAt: now() }; save(); openDeck(id);
   },
   async rename() {
     const d = db.decks[state.deckId], n = await askText('Renommer le paquet', d.name); if (!n) return;
@@ -67,12 +82,13 @@ const A = {
     const d = db.decks[state.deckId], cs = cardsOf(d.id);
     const m1 = !cs.length ? `« ${d.name} » sera supprimé.` : cs.length === 1 ? `« ${d.name} » et sa carte seront supprimés.` : `« ${d.name} » et ses ${cs.length} cartes seront supprimés.`;
     if (!await confirmDlg({ title: 'Supprimer ce paquet ?', msg: m1, ok: 'Supprimer', danger: true })) return;
-    const items = [d, ...cs]; softDelete(items); save(); go('home');
+    const items = [d, ...cs], f = folderOf(d); softDelete(items); save();
+    if (f) go('folder', { folderId: f.id }); else go('home');
     toast('Paquet supprimé', { action: ['Annuler', () => { restore(items); save(); render(); }] });
   },
   async newfolder() {
     const n = await askText('Nouveau classeur', '', 'Nom du classeur'); if (!n) return;
-    const id = uid(); db.folders[id] = { id, name: n, updatedAt: now() }; save(); render();
+    const id = uid(); db.folders[id] = { id, name: n, updatedAt: now() }; save(); go('folder', { folderId: id });
   },
   async renamefolder(id) {
     const f = db.folders[id], n = await askText('Renommer le classeur', f.name); if (!n) return;
@@ -82,17 +98,23 @@ const A = {
     const f = db.folders[id], inside = decks().filter(d => d.folderId === id);
     const m2 = !inside.length ? 'Ce classeur est vide.' : inside.length === 1 ? `Le paquet qu'il contient n'est pas supprimé : il sort simplement du classeur.` : `Les ${inside.length} paquets qu'il contient ne sont pas supprimés : ils sortent simplement du classeur.`;
     if (!await confirmDlg({ title: 'Supprimer ce classeur ?', msg: m2, ok: 'Supprimer', danger: true })) return;
-    softDelete([f]); inside.forEach(d => { d.folderId = null; touch(d); }); save(); render();
+    softDelete([f]); inside.forEach(d => { d.folderId = null; touch(d); }); save(); go('home');
     toast('Classeur supprimé', { action: ['Annuler', () => { restore([f]); inside.forEach(d => { d.folderId = id; touch(d); }); save(); render(); }] });
   },
-  togglefolder(id) { if (state.closedFolders.has(id)) state.closedFolders.delete(id); else state.closedFolders.add(id); render(); },
   async reset() {
     const cs = cardsOf(state.deckId);
-    if (!await confirmDlg({ title: 'Réinitialiser le tri ?', msg: 'Toutes les cartes de ce paquet repasseront en « non triées ». Les marques 🚩 sont conservées.', ok: 'Réinitialiser', danger: true })) return;
+    if (!await confirmDlg({ title: 'Réinitialiser le tri ?', msg: 'Toutes les cartes de ce paquet repasseront en « non triées ». Les marques sont conservées.', ok: 'Réinitialiser', danger: true })) return;
     const prev = cs.map(c => [c, c.status]); cs.forEach(c => { c.status = 'new'; touch(c); }); save(); render();
     toast('Tri réinitialisé', { action: ['Annuler', () => { prev.forEach(([c, s]) => { c.status = s; touch(c); }); save(); render(); }] });
   },
-  sample() { const id = createSample(); toast('Paquet d\'exemple créé 🎉'); openDeck(id); },
+  exportdeck() {
+    const d = db.decks[state.deckId], a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([deckToCsv(d.id)], { type: 'text/csv;charset=utf-8' }));
+    a.download = safeName(d.name) + '.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Paquet exporté en CSV');
+  },
+  sample() { const id = createSample(); toast('Paquet d\'exemple créé'); openDeck(id); },
 
   /* sélection multiple */
   rowtap(id) {
@@ -100,8 +122,8 @@ const A = {
     if (state.sel.has(id)) state.sel.delete(id); else state.sel.add(id);
     refreshDeckList();
   },
-  selmode() { state.selMode = !state.selMode; state.sel = new Set(); refreshDeckList(); },
-  selcancel() { state.selMode = false; state.sel = new Set(); refreshDeckList(); },
+  selmode() { state.selMode = !state.selMode; state.sel = new Set(); render(); },
+  selcancel() { state.selMode = false; state.sel = new Set(); render(); },
   selall() {
     const ids = visibleCards().map(c => c.id);
     state.sel = ids.every(i => state.sel.has(i)) ? new Set() : new Set(ids);
@@ -126,12 +148,60 @@ const A = {
   restudy(mode) { const st = state.study; startStudy(mode, st.deckId, st.folderId); },
   blitzgo: () => blitzGo(),
   blitzagain() { const st = state.study; startBlitz(st.deckId, st.folderId); },
-  flip() { const st = state.study; if (st.mode === 'blitz' && !st.ready) return; st.flip = !st.flip; render(); },
+  flip() {
+    const st = state.study; if (st.mode === 'blitz' && !st.ready) return;
+    const sel = getSelection(), box = document.querySelector('.fc-in');   // une sélection de texte (pour surligner) ne retourne pas la carte
+    if (sel && !sel.isCollapsed && sel.toString().trim() && box && box.contains(sel.anchorNode)) return;
+    st.flip = !st.flip; render();
+  },
   ans: id => answer(id),
   back() { const st = state.study; if (st.i > 0) { st.i--; st.flip = false; render(); } },
   flagstudy() { const st = state.study, c = db.cards[st.queue[st.i]]; c.flag = !c.flag; touch(c); save(); render(); },
   editstudy() { const st = state.study; go('edit', { editId: st.queue[st.i], editFrom: 'study' }); },
-  gameon() { cfg.game = true; saveCfg(); render(); toast('🎮 Mode jeu activé : gagne des XP en révisant !'); },
+  gameon() { cfg.game = true; saveCfg(); render(); toast('Mode jeu activé : gagne des XP en révisant !'); },
+  studyhl: id => studyHighlight(id),
+
+  /* ajout rapide pendant la révision */
+  quickadd() {
+    const st = state.study; if (!st || st.mode === 'blitz' || st.i >= st.queue.length) return;
+    const cur = db.cards[st.queue[st.i]];
+    const ds = st.folderId === '*' ? decks() : st.folderId ? decks().filter(d => d.folderId === st.folderId) : [db.decks[st.deckId]].filter(Boolean);
+    if (!ds.length) return;
+    const def = cur && ds.some(d => d.id === cur.deckId) ? cur.deckId : ds[0].id;
+    state.qadd = 0; state.lastField = 'qq';
+    showCompose(`<div class="cmp-back" data-a="cmpclose"></div><div class="cmp" role="dialog" aria-modal="true" aria-label="Nouvelle carte">
+      <div class="cmp-nav">${nb('Fermer', '', 'data-a="cmpclose"')}<b>Nouvelle carte</b>${nb('Ajouter', '', 'data-a="cmpadd"', 'strong')}</div>
+      <div class="cmp-body">
+        ${ds.length > 1 ? `<div class="list" style="margin-bottom:14px"><div class="row static"><span class="rt"><b>Paquet</b></span><select id="qdeck" aria-label="Paquet">${ds.map(d => opt(d.id, esc(d.name), def)).join('')}</select></div></div>`
+          : `<input type="hidden" id="qdeck" value="${ds[0].id}"><p class="subtitle" style="margin-bottom:10px">Ajout dans « ${esc(ds[0].name)} »</p>`}
+        ${toolbar()}
+        <div class="list"><div class="cell"><label for="qq">Question</label><textarea id="qq" placeholder="Texte, formules LaTeX…"></textarea></div><div class="cell"><label for="qa">Réponse</label><textarea id="qa" placeholder="Texte, formules LaTeX…"></textarea></div></div>
+        <p class="grp-f" id="qcount" aria-live="polite">La carte rejoint la session en cours.</p></div></div>`);
+    $('qq').focus();
+  },
+  cmpadd() {
+    const q = $('qq').value.trim(), a = $('qa').value.trim(), st = state.study, did = $('qdeck').value;
+    if (!q || !a) return toast('Question et réponse requises.', { kind: 'err' });
+    const id = addCard(did, q, a); save();
+    if (st && st.mode !== 'blitz') st.queue.push(id);
+    state.qadd = (state.qadd || 0) + 1;
+    $('qq').value = ''; $('qa').value = ''; $('qq').focus();
+    $('qcount').textContent = `${state.qadd} ${plural(state.qadd, 'carte ajoutée', 'cartes ajoutées')} — elle${state.qadd > 1 ? 's' : ''} ${plural(state.qadd, 'sera', 'seront')} revue${state.qadd > 1 ? 's' : ''} en fin de session.`;
+    buzz(8); render();
+  },
+  cmpclose: () => closeCompose(),
+
+  /* surlignage : palette et couleur */
+  hlpal(_, t) {
+    const pal = t.closest('.tb').querySelector('.hlpal'); pal.hidden = !pal.hidden;
+    if (!pal.hidden) syncToolbars();
+  },
+  hlset(color) {
+    cfg.hl = color; saveCfg(); syncToolbars();
+    document.querySelectorAll('.hlpal').forEach(p => { p.hidden = true; });
+    const el = activeField();
+    if (el && hasTarget(el)) insertSnippet('hl');          // applique tout de suite au mot ou à la sélection
+  },
 
   /* édition */
   addcard: () => go('edit', { editId: null, editFrom: null, addCount: 0 }),
@@ -144,7 +214,10 @@ const A = {
     }
     go(state.editFrom === 'study' ? 'study' : 'deck');
   },
-  flagedit(_, t) { const c = db.cards[state.editId]; c.flag = !c.flag; touch(c); save(); t.textContent = c.flag ? '🚩' : '⚐'; },
+  flagedit(_, t) {
+    const c = db.cards[state.editId]; c.flag = !c.flag; touch(c); save();
+    t.innerHTML = `${tile(c.flag ? 'flag-f' : 'flag', 'r')}<span class="rt"><b>${c.flag ? 'Retirer la marque' : 'Marquer cette carte'}</b></span>`;
+  },
   latex: id => insertSnippet(id),
   savecard() {
     const q = $('eq').value.trim(), a = $('ea').value.trim();
@@ -197,7 +270,7 @@ const A = {
   /* compte & données */
   async connect() {
     const c = $('cid'); if (c) { cfg.clientId = c.value.trim(); saveCfg(); }
-    try { await getToken('select_account'); cfg.signedIn = true; saveCfg(); startAutoSyncLoop(); await doSync(false); if (state.view === 'settings' || state.view === 'home') render(); }
+    try { await getToken('select_account'); cfg.signedIn = true; saveCfg(); startAutoSyncLoop(); await doSync(false); if (['settings', 'home'].includes(state.view)) render(); }
     catch (e) { setMsg('⚠️ ' + e.message); toast('Connexion impossible : ' + e.message, { kind: 'err' }); }
   },
   async relogin() {
@@ -222,10 +295,10 @@ const A = {
 function onSetting(t) {
   const k = t.dataset.s, v = t.type === 'checkbox' ? t.checked : k === 'goal' ? Number(t.value) : t.value;
   cfg[k] = v; saveCfg();
-  if (k === 'theme') applyTheme();
+  if (k === 'theme' || k === 'accent') applyTheme();
   if (k === 'sound' && v) sfx.ok();
   if (k === 'game') {
-    if (v) toast('🎮 Mode jeu activé : gagne des XP en révisant !');
+    if (v) toast('Mode jeu activé : gagne des XP en révisant !');
     const ctx = $sheet.dataset.ctx; render(); if (ctx) A.studymenu(ctx);
   }
 }
@@ -251,7 +324,6 @@ document.addEventListener('change', async e => {
   const t = e.target;
   if (t.dataset.s) return onSetting(t);
   if (t.dataset.f === 'deckFolder') { const d = db.decks[state.deckId]; d.folderId = t.value || null; touch(d); save(); closeSheet(); render(); return; }
-  if (t.dataset.f === 'filter') { state.filter = t.value; state.limit = 200; refreshDeckList(); return; }
   if (t.id === 'csvfile' && t.files[0]) { state.imp.text = await readFile(t.files[0]); updatePreview(); return; }
   if (t.id === 'jsonfile' && t.files[0]) {
     try { db = normDb(merge(db, JSON.parse(await readFile(t.files[0])))); save(); toast('Sauvegarde importée et fusionnée.'); go('home'); }
@@ -278,12 +350,17 @@ document.addEventListener('keydown', e => {
     else if (e.key === 'Enter' && e.target.id === 'dlgin') { e.preventDefault(); A.dlgok(); }
     return;
   }
-  if (e.key === 'Escape' && $sheet.innerHTML) { closeSheet(); return; }
+  if (e.key === 'Escape') {
+    if ($sheet.innerHTML) { closeSheet(); return; }
+    if ($compose.classList.contains('open')) { closeCompose(); return; }
+    if (pill) { hidePill(); return; }
+  }
+  if ($compose.classList.contains('open') && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); A.cmpadd(); return; }
   if ((e.ctrlKey || e.metaKey) && FIELD_IDS.includes(e.target.id) && (e.key === 'b' || e.key === 'u')) { e.preventDefault(); state.lastField = e.target.id; insertSnippet(e.key === 'b' ? 'bold' : 'under'); return; }
   const el = e.target;
   // éléments cliquables non-boutons (cartes, paquets) : Entrée / Espace comme un bouton
   if ((e.key === 'Enter' || e.key === ' ') && el.matches && el.matches('[role=button][data-a]') && state.view !== 'study') { e.preventDefault(); el.click(); return; }
-  if (state.view !== 'study' || $sheet.innerHTML || /INPUT|TEXTAREA|SELECT|BUTTON/.test(el.tagName)) return;
+  if (state.view !== 'study' || $sheet.innerHTML || $compose.classList.contains('open') || /INPUT|TEXTAREA|SELECT|BUTTON/.test(el.tagName)) return;
   const st = state.study;
   if (st.mode === 'blitz' && !st.ready) { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); blitzGo(); } return; }
   if (st.over || st.i >= st.queue.length) return;
@@ -291,6 +368,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight' && st.flip) answer('known');
   else if (e.key === 'ArrowLeft' && st.flip) answer('unknown');
   else if ((e.key === 'f' || e.key === 'F') && st.mode !== 'blitz') A.flagstudy();
+  else if ((e.key === 'n' || e.key === 'N') && st.mode !== 'blitz') { e.preventDefault(); A.quickadd(); }
 });
 
 /* ---------- démarrage ---------- */

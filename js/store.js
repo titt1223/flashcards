@@ -46,6 +46,7 @@ function sumStats(list) {
 function addCard(deckId, q, a, status = 'new') {
   const id = uid();
   db.cards[id] = { id, deckId, q, a, status, updatedAt: now() };
+  return id;
 }
 function touch(o) { o.updatedAt = now(); }
 // suppression « douce » (annulable et synchronisable) : on marque, on ne retire jamais
@@ -90,6 +91,6 @@ function merge(a, b) {
 }
 
 /* ---------- état de l'interface ---------- */
-const state = { view: 'home', deckId: null, filter: 'all', search: '', gsearch: '', limit: 200, selMode: false, sel: new Set(), study: null,
+const state = { view: 'home', deckId: null, folderId: null, filter: 'all', search: '', gsearch: '', limit: 200, selMode: false, sel: new Set(), study: null,
   editId: null, editFrom: null, addCount: 0, impFrom: 'home', msg: '', lastField: 'eq', closedFolders: new Set(), needLogin: false, timer: null,
   imp: { tab: 'csv', deckId: '', newName: '', text: '', delim: 'auto', header: false, cardSep: 'nl', fieldSep: 'tab', customCard: '', customField: '', which: 'first', addCount: 0 } };

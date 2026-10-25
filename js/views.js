@@ -1,8 +1,9 @@
 'use strict';
-/* Vues : chaque écran est une fonction qui renvoie du HTML ; render() l'affiche. */
+/* Vues : chaque écran est une fonction qui renvoie du HTML ; render() l'affiche. Conception inspirée d'iOS :
+   grands titres, listes groupées, barre d'onglets, contrôles segmentés. */
 
 const go = (view, extra = {}) => {
-  closeSheet();
+  closeSheet(); closeCompose(); hidePill();
   if (view !== 'deck') { state.selMode = false; state.sel = new Set(); }
   if (view !== 'study' && state.timer) { clearInterval(state.timer); state.timer = null; }
   if (view === 'home' && !('gsearch' in extra)) state.gsearch = '';   // revenir à l'accueil repart d'une recherche vide
@@ -12,70 +13,73 @@ const go = (view, extra = {}) => {
 };
 
 /* ---------- éléments communs ---------- */
-function bar(s) {
+const goneFolder = f => !f || f.deleted;
+const folderOf = d => (d.folderId && !goneFolder(db.folders[d.folderId]) ? db.folders[d.folderId] : null);
+function progBar(s) {
   const t = s.total || 1;
-  return `<div class="prog"><i class="g" style="width:${s.known / t * 100}%"></i><i class="r" style="width:${s.unknown / t * 100}%"></i></div>`;
+  return `<div class="prog" role="img" aria-label="${s.known} connues, ${s.unknown} à revoir, ${s.new} non triées"><i class="g" style="width:${s.known / t * 100}%"></i><i class="r" style="width:${s.unknown / t * 100}%"></i></div>`;
 }
-const chips = s => `<div class="chips"><span class="chip">${s.total} ${plural(s.total, 'carte', 'cartes')}</span><span class="chip g">✓ ${s.known}</span><span class="chip r">✗ ${s.unknown}</span><span class="chip">○ ${s.new}</span>${s.flag ? `<span class="chip f">🚩 ${s.flag}</span>` : ''}</div>`;
-function deckBox(d) {
-  const s = stats(d.id);
-  return `<div class="box deck" role="button" tabindex="0" data-a="open" data-id="${d.id}"><b>${esc(d.name)}</b>${chips(s)}${bar(s)}</div>`;
+function deckSub(s) {
+  if (!s.total) return 'Aucune carte';
+  return `${s.total} ${plural(s.total, 'carte', 'cartes')}${s.unknown ? ` · <span class="bad">${s.unknown} à revoir</span>` : ''}`;
 }
-function folderBox(f) {
-  const ds = decks().filter(d => d.folderId === f.id), s = sumStats(ds), closed = state.closedFolders.has(f.id);
-  return `<div class="box folder">
-    <div class="fhead" role="button" tabindex="0" aria-expanded="${!closed}" data-a="togglefolder" data-id="${f.id}">
-      <div class="grow"><b>📁 ${esc(f.name)}</b> <span class="mut">· ${ds.length} ${plural(ds.length, 'paquet', 'paquets')}</span>${chips(s)}</div>
-      <span class="fold-ico">${closed ? '▸' : '▾'}</span>
-    </div>
-    <div class="bar" style="margin:10px 0 0"><button class="pri sm" data-a="studymenu" data-id="f:${f.id}" ${s.total ? '' : 'disabled'}>▶ Réviser</button><span class="sp"></span>${ib('⋯', 'Options du classeur', `data-a="foldermenu" data-id="${f.id}"`)}</div>
-    ${closed ? '' : `<div style="margin-top:10px;display:grid;gap:10px">${ds.map(deckBox).join('') || '<p class="mut">Classeur vide. Ouvre un paquet et choisis ce classeur.</p>'}</div>`}
-  </div>`;
+const deckRow = d => `<div class="row ic" role="button" tabindex="0" data-a="open" data-id="${d.id}">${tile('layers', 'g')}<span class="rt"><b>${esc(d.name)}</b><small class="c1">${deckSub(stats(d.id))}</small></span><span class="trail">${icon('chev-r', 18)}</span></div>`;
+function folderRow(f) {
+  const ds = decks().filter(d => d.folderId === f.id), s = sumStats(ds);
+  return `<div class="row ic" role="button" tabindex="0" data-a="openfolder" data-id="${f.id}">${tile('folder', 'o')}<span class="rt"><b>${esc(f.name)}</b><small class="c1">${ds.length} ${plural(ds.length, 'paquet', 'paquets')} · ${s.total} ${plural(s.total, 'carte', 'cartes')}</small></span><span class="trail">${icon('chev-r', 18)}</span></div>`;
 }
 function searchResults() {
   const rs = Object.values(db.cards).filter(c => !c.deleted && db.decks[c.deckId] && !db.decks[c.deckId].deleted && matches(c, state.gsearch));
-  if (!rs.length) return '<p class="mut" style="text-align:center;padding:24px 0">Aucune carte trouvée.</p>';
-  return `<p class="mut">${rs.length} ${plural(rs.length, 'résultat', 'résultats')}</p>` + rs.slice(0, 100).map(c =>
-    `<div class="crow" role="button" tabindex="0" data-a="gopen" data-id="${c.id}"><span class="dot ${c.status}"></span><div class="math grow"><div class="mut" style="font-size:.78rem">${esc(db.decks[c.deckId].name)}</div><b>${fmt(c.q)}</b><div class="ans-line">${fmt(c.a)}</div></div></div>`).join('')
-    + (rs.length > 100 ? '<p class="mut">… affine ta recherche pour voir la suite.</p>' : '');
+  if (!rs.length) return '<div class="empty">Aucune carte trouvée.</div>';
+  return `<div class="grp-h" style="margin-top:6px">${rs.length} ${plural(rs.length, 'résultat', 'résultats')}</div><div class="list">${rs.slice(0, 100).map(c =>
+    `<div class="row" role="button" tabindex="0" data-a="gopen" data-id="${c.id}"><span class="dot ${c.status}"></span><div class="rt math"><small>${esc(db.decks[c.deckId].name)}</small><b class="c2">${fmt(c.q)}</b><small class="c1">${fmt(c.a)}</small></div><span class="trail">${icon('chev-r', 18)}</span></div>`).join('')}</div>`
+    + (rs.length > 100 ? '<p class="grp-f">… affine ta recherche pour voir la suite.</p>' : '');
 }
 function homeBody() {
   if (state.gsearch.trim()) return searchResults();
-  const noFolder = decks().filter(d => !d.folderId || !db.folders[d.folderId] || db.folders[d.folderId].deleted);
-  const list = folders().map(folderBox).join('') + noFolder.map(deckBox).join('');
-  return list || '<div class="empty"><div class="big">🌱</div><p class="mut">Aucun paquet pour l\'instant.<br>Appuie sur + pour en créer un ou importer des cartes.</p></div>';
+  const fs = folders(), loose = decks().filter(d => !folderOf(d));
+  if (!fs.length && !loose.length) return '<div class="empty"><div class="big">🌱</div><p>Aucun paquet pour l\'instant.<br>Touche + pour en créer un ou importer des cartes.</p></div>';
+  let h = '';
+  if (fs.length) h += `${loose.length ? '<div class="grp-h">Classeurs</div>' : ''}<div class="list">${fs.map(folderRow).join('')}</div>`;
+  if (loose.length) h += `${fs.length ? '<div class="grp-h">Paquets</div>' : ''}<div class="list">${loose.map(deckRow).join('')}</div>`;
+  return h;
 }
+// pastille « cloud » : signale (point rouge sur l'onglet Réglages) qu'une reconnexion est nécessaire
 function updateCloud() {
-  const c = $('cloudbtn'), r = $('relink'), bad = cfg.signedIn && state.needLogin;
-  if (c) c.classList.toggle('alert', bad);
+  const bad = cfg.signedIn && state.needLogin, t = $('tab-settings'), r = $('relink');
+  if (t) t.classList.toggle('alert', bad);
   if (r) r.hidden = !bad;
 }
+function renderTabbar() {
+  const tb = $('tabbar'), show = ['home', 'folder', 'deck', 'stats', 'settings'].includes(state.view);
+  $app.classList.toggle('notab', !show);
+  if (!show) { tb.innerHTML = ''; return; }
+  const cur = state.view === 'stats' ? 'stats' : state.view === 'settings' ? 'settings' : 'home';
+  tb.innerHTML = [['home', 'Bibliothèque', 'book'], ['stats', cfg.game ? 'Profil' : 'Progrès', 'chart'], ['settings', 'Réglages', 'sliders']]
+    .map(([id, l, ic]) => `<button type="button" id="tab-${id}" class="${cur === id ? 'on' : ''}" data-a="tab" data-id="${id}" aria-current="${cur === id ? 'page' : 'false'}">${icon(ic, 24)}<span>${l}</span></button>`).join('');
+  updateCloud();
+}
 
-/* ---------- mode jeu : tableau de bord ---------- */
+/* ---------- mode jeu : carte « Aujourd'hui » ---------- */
 function ring(pct, label) {
   const C = 163.36;
-  return `<div class="ring ${pct >= 1 ? 'done' : ''}"><svg width="64" height="64" viewBox="0 0 64 64" aria-hidden="true"><circle class="rbg" cx="32" cy="32" r="26"/><circle class="rfg" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${(C * (1 - Math.min(1, pct))).toFixed(2)}"/></svg><div class="num">${label}</div></div>`;
+  return `<div class="ring ${pct >= 1 ? 'done' : ''}"><svg width="54" height="54" viewBox="0 0 64 64" aria-hidden="true"><circle class="rbg" cx="32" cy="32" r="26"/><circle class="rfg" cx="32" cy="32" r="26" stroke-dasharray="${C}" stroke-dashoffset="${(C * (1 - Math.min(1, pct))).toFixed(2)}"/></svg><div class="num">${label}</div></div>`;
 }
-function gameCard() {
-  const t = gameTotals(), li = levelInfo(t.xp), sk = streakInfo(), n = dayTotals(TODAY()).n, goal = cfg.goal || 20, pct = n / goal;
-  const total = allCards().length, due = Math.min(Math.max(5, goal), total);
-  return `<div class="box gcard">
-    <div class="gtop">${ring(pct, pct >= 1 ? '✓' : Math.round(pct * 100) + '%')}
-      <div class="grow"><b>${n >= goal ? 'Objectif atteint 🎉' : 'Objectif du jour'}</b><div class="mut">${n} / ${goal} ${plural(goal, 'carte révisée', 'cartes révisées')}</div></div>
-      <div class="gstreak ${sk.today ? 'on' : ''}" title="Jours de suite"><span>🔥</span><b>${sk.cur}</b></div></div>
-    <div class="glvl"><span class="lvlchip">Niv. ${li.level}</span><span class="mut">${esc(li.title)}</span><span class="sp"></span><span class="mut">${li.into} / ${li.need} XP</span></div>
-    <div class="xpbar" role="progressbar" aria-valuenow="${li.into}" aria-valuemax="${li.need}"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div>
-    <div class="bar" style="margin:14px 0 0"><button class="pri grow" data-a="run" data-mode="daily" ${total ? '' : 'disabled'}>▶ Session du jour (${due} ${plural(due, 'carte', 'cartes')})</button><button data-a="stats">Profil</button></div></div>`;
+function todayCard() {
+  const n = dayTotals(TODAY()).n, goal = cfg.goal || 20, pct = n / goal, sk = streakInfo(), total = allCards().length;
+  return `<div class="today">${ring(pct, pct >= 1 ? '✓' : Math.round(pct * 100) + '%')}
+    <div class="grow"><b>Aujourd'hui</b><div class="mut" style="font-size:15px">${n} sur ${goal}${sk.cur ? ` · 🔥 ${sk.cur}` : ''}</div></div>
+    <button type="button" class="btn pri sm" data-a="run" data-mode="daily" ${total ? '' : 'disabled'}>Commencer</button></div>`;
 }
 function onboarding() {
-  return `<div class="box onb"><div class="big">👋</div><h2>Bienvenue !</h2>
+  return `<div class="onb"><div class="big">👋</div><h2>Bienvenue</h2>
     <p class="mut" style="margin:0">Crée des paquets de cartes, trie-les en « je connais / je ne connais pas » et révise jusqu'à tout savoir.</p>
     <ol><li><b>Crée</b> un paquet ou <b>importe</b> un fichier CSV</li><li><b>Révise</b> et trie tes cartes</li><li><b>Synchronise</b> avec Google pour les retrouver partout</li></ol>
-    <div class="bar" style="justify-content:center"><button class="pri" data-a="newdeck">+ Créer un paquet</button><button data-a="sample">✨ Essayer avec un exemple</button></div>
-    ${clientId() ? '<button class="lnk" data-a="connect">Déjà utilisé sur un autre appareil ? Se connecter avec Google</button>' : ''}</div>`;
+    <div class="btns wrap" style="justify-content:center;margin:0"><button type="button" class="btn pri" data-a="newdeck">Créer un paquet</button><button type="button" class="btn" data-a="sample">Essayer avec un exemple</button></div>
+    ${clientId() ? '<p style="margin:16px 0 0"><button type="button" class="lnk" data-a="connect">Déjà utilisé sur un autre appareil ? Se connecter avec Google</button></p>' : ''}</div>`;
 }
 
-/* ---------- liste de cartes d'un paquet ---------- */
+/* ---------- liste des cartes d'un paquet ---------- */
 function visibleCards() {
   let cs = cardsOf(state.deckId);
   if (state.filter !== 'all') cs = cs.filter(c => state.filter === 'flag' ? c.flag : c.status === state.filter);
@@ -83,18 +87,18 @@ function visibleCards() {
 }
 function cardRow(c) {
   const on = state.sel.has(c.id);
-  return `<div class="crow${on ? ' on' : ''}" role="button" tabindex="0" ${state.selMode ? `aria-pressed="${on}"` : ''} data-a="rowtap" data-id="${c.id}">${state.selMode ? `<span class="chk" aria-hidden="true">${on ? '☑' : '☐'}</span>` : `<span class="dot ${c.status}"></span>`}<div class="math grow"><b>${fmt(c.q)}</b><div class="ans-line">${fmt(c.a)}</div></div>${c.flag ? '<span class="flg" title="Marquée">🚩</span>' : ''}</div>`;
+  return `<div class="row${on ? ' on' : ''}" role="button" tabindex="0" ${state.selMode ? `aria-pressed="${on}"` : ''} data-a="rowtap" data-id="${c.id}">${state.selMode ? `<span class="chk" aria-hidden="true">${icon(on ? 'check-circle' : 'circle', 24)}</span>` : `<span class="dot ${c.status}"></span>`}<div class="rt math"><b class="c2">${fmt(c.q)}</b><small class="c1">${fmt(c.a)}</small></div>${c.flag ? `<span class="flg" title="Marquée">${icon('flag-f', 16)}</span>` : ''}</div>`;
 }
 function cardList() {
   const cs = visibleCards();
-  if (!cs.length) return `<p class="mut" style="text-align:center;padding:24px 0">${state.search || state.filter !== 'all' ? 'Aucune carte trouvée.' : 'Aucune carte pour l\'instant.'}</p>`;
+  if (!cs.length) return `<div class="empty" style="padding:36px 16px">${state.search || state.filter !== 'all' ? 'Aucune carte trouvée.' : 'Aucune carte pour l\'instant.'}</div>`;
   const shown = cs.slice(0, state.limit), rest = cs.length - shown.length;
-  return shown.map(cardRow).join('') + (rest > 0 ? `<button type="button" class="more" data-a="more">Afficher plus (${rest} ${plural(rest, 'restante', 'restantes')})</button>` : '');
+  return `<div class="list">${shown.map(cardRow).join('')}${rest > 0 ? `<button type="button" class="more" data-a="more">Afficher plus (${rest} ${plural(rest, 'restante', 'restantes')})</button>` : ''}</div>`;
 }
 function selBarHTML() {
   if (!state.selMode) return '';
   const n = state.sel.size;
-  return `<div class="selbar">${ib('✕', 'Annuler la sélection', 'data-a="selcancel"')}<b class="grow" aria-live="polite">${n} ${plural(n, 'sélectionnée', 'sélectionnées')}</b><button class="sm" data-a="selall">Tout</button><button class="ko sm" data-a="seldel" ${n ? '' : 'disabled'}>Supprimer</button></div>`;
+  return `<div class="selbar"><b class="grow" aria-live="polite">${n} ${plural(n, 'sélectionnée', 'sélectionnées')}</b><button type="button" class="btn sm" data-a="selall">Tout</button><button type="button" class="btn sm ko" data-a="seldel" ${n ? '' : 'disabled'}>Supprimer</button></div>`;
 }
 function refreshDeckList() {
   const l = $('cardlist'), sb = $('selbar');
@@ -104,202 +108,199 @@ function refreshDeckList() {
 }
 
 /* ---------- étude : résumés ---------- */
-const starsRow = n => `<div class="stars" aria-label="${n} étoile${n > 1 ? 's' : ''} sur 3">${[1, 2, 3].map(i => `<span class="star ${i <= n ? 'on' : ''}">★</span>`).join('')}</div>`;
+const starsRow = n => `<div class="stars" role="img" aria-label="${n} étoile${n > 1 ? 's' : ''} sur 3">${[1, 2, 3].map(i => `<span class="star ${i <= n ? 'on' : ''}">★</span>`).join('')}</div>`;
 function goalBlock() {
   const li = levelInfo(totalXp()), n = dayTotals(TODAY()).n, goal = cfg.goal || 20, sk = streakInfo();
-  return `<div class="box"><div class="glvl" style="margin-top:0"><span class="lvlchip">Niv. ${li.level}</span><span class="mut">${esc(li.title)}</span><span class="sp"></span><span class="mut">${li.into} / ${li.need} XP</span></div>
+  return `<div class="card"><div class="glvl" style="margin-top:0"><span class="lvlchip">Niv. ${li.level}</span><span class="mut">${esc(li.title)}</span><span class="sp"></span><span class="mut">${li.into} / ${li.need} XP</span></div>
     <div class="xpbar"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div>
-    <div class="glvl"><span class="mut">🎯 Objectif du jour</span><span class="sp"></span><b>${Math.min(n, goal)} / ${goal}</b></div>
+    <div class="glvl"><span class="mut">Objectif du jour</span><span class="sp"></span><b>${Math.min(n, goal)} / ${goal}</b></div>
     <div class="xpbar"><i style="width:${Math.min(100, n / goal * 100).toFixed(1)}%"></i></div>
     <p class="mut" style="margin:12px 0 0">🔥 ${sk.cur} ${plural(sk.cur, 'jour', 'jours')} de suite</p></div>`;
 }
+const badgePills = list => list.length ? `<div class="card"><h2>Badges débloqués</h2>${list.map(b => `<span class="pill">${b.icon} ${esc(b.name)}</span>`).join('')}</div>` : '';
 function summaryView(st) {
-  const s = scopeStats(st.deckId, st.folderId);
-  const acc = st.na ? Math.round(st.nk / st.na * 100) : 0;
-  const done = st.mode === 'unknown' && !s.unknown;
-  const title = done ? 'Bravo, plus rien à revoir 🎉' : 'Session terminée 🎉';
-  const btns = `<div class="bar">${s.unknown ? `<button class="ko grow" data-a="restudy" data-id="unknown">🔁 Revoir « je ne connais pas » (${s.unknown})</button>` : ''}${s.new ? `<button class="grow" data-a="restudy" data-id="new">Continuer le tri (${s.new})</button>` : ''}<button class="${s.unknown || s.new ? '' : 'pri grow'}" data-a="studyback">Retour</button></div>`;
+  const s = scopeStats(st.deckId, st.folderId), acc = st.na ? Math.round(st.nk / st.na * 100) : 0, done = st.mode === 'unknown' && !s.unknown;
+  const title = done ? 'Bravo, plus rien à revoir' : 'Session terminée';
+  const btns = `<div class="btns wrap">${s.unknown ? `<button type="button" class="btn ko grow" data-a="restudy" data-id="unknown">Revoir « je ne connais pas » (${s.unknown})</button>` : ''}${s.new ? `<button type="button" class="btn grow" data-a="restudy" data-id="new">Continuer le tri (${s.new})</button>` : ''}<button type="button" class="btn ${s.unknown || s.new ? '' : 'pri'} grow" data-a="studyback">Terminé</button></div>`;
+  const nav = navbar({ title: 'Résumé', solid: true });
   if (!cfg.game) {
-    return `<h1 class="sumtitle">${title}</h1>
-      <div class="kpis"><div class="kpi"><b>${st.na}</b><span>${plural(st.na, 'carte révisée', 'cartes révisées')}</span></div><div class="kpi"><b>${acc}%</b><span>Précision (${st.nk}/${st.na})</span></div></div>${btns}`;
+    return nav + `<h1 class="large center" style="margin-top:8px">${title} 🎉</h1><p class="subtitle center">${esc(scopeName(st))}</p>
+      <div class="kpis"><div class="kpi"><b>${st.na}</b><span>${plural(st.na, 'carte révisée', 'cartes révisées')}</span></div><div class="kpi"><b>${acc} %</b><span>Précision (${st.nk}/${st.na})</span></div></div>${btns}`;
   }
-  return `<h1 class="sumtitle" style="text-align:center">${title}</h1>${st.na ? starsRow(st.stars) : ''}
+  return nav + `<h1 class="large center" style="margin-top:8px">${title}</h1>${st.na ? starsRow(st.stars) : ''}
     <div class="kpis"><div class="kpi"><b>+${st.xp}</b><span>XP gagnés${st.bonus ? ` (dont ${st.bonus} de bonus)` : ''}</span></div>
-      <div class="kpi"><b>${acc}%</b><span>Précision (${st.nk}/${st.na})</span></div>
+      <div class="kpi"><b>${acc} %</b><span>Précision (${st.nk}/${st.na})</span></div>
       <div class="kpi"><b>×${st.bestCombo}</b><span>Meilleure série</span></div>
       <div class="kpi"><b>${st.round > 1 ? st.round : st.na}</b><span>${st.round > 1 ? 'tours' : plural(st.na, 'carte révisée', 'cartes révisées')}</span></div></div>
-    ${st.newBadges.length ? `<div class="box"><h2>Badges débloqués</h2><div class="chips">${st.newBadges.map(b => `<span class="chip g">${b.icon} ${esc(b.name)}</span>`).join('')}</div></div>` : ''}
-    ${goalBlock()}${btns}`;
+    ${badgePills(st.newBadges)}${goalBlock()}${btns}`;
 }
 function blitzView(st) {
+  const quit = nbi('x', 'Quitter', 'data-a="studyback"');
   if (st.over) {
     const acc = st.na ? Math.round(st.nk / st.na * 100) : 0;
-    return `<h1 class="sumtitle" style="text-align:center">⚡ Défi terminé</h1>
-      <div class="box" style="text-align:center"><div style="font-size:3.4rem;font-weight:800;color:var(--pri2);line-height:1.1">${st.score}</div>
+    return navbar({ title: 'Défi éclair', solid: true }) + `<h1 class="large center" style="margin-top:8px">Défi terminé</h1>
+      <div class="card center"><div style="font-size:3.6rem;font-weight:700;line-height:1.1;letter-spacing:-.03em">${st.score}</div>
         <div class="mut">${plural(st.score, 'bonne réponse', 'bonnes réponses')} en 60 secondes</div>
-        <p style="margin:10px 0 0;font-weight:800">${st.newRecord ? (st.prevBest ? '🏆 Nouveau record !' : '🏆 Premier record !') : st.prevBest ? `Record à battre : ${st.prevBest}` : ''}</p></div>
-      <div class="kpis"><div class="kpi"><b>+${st.xp}</b><span>XP gagnés${st.bonus ? ` (dont ${st.bonus} de bonus)` : ''}</span></div><div class="kpi"><b>${acc}%</b><span>Précision (${st.nk}/${st.na})</span></div></div>
-      ${st.newBadges.length ? `<div class="box"><h2>Badges débloqués</h2><div class="chips">${st.newBadges.map(b => `<span class="chip g">${b.icon} ${esc(b.name)}</span>`).join('')}</div></div>` : ''}
-      <div class="bar"><button class="pri grow" data-a="blitzagain">⚡ Rejouer</button><button data-a="studyback">Retour</button></div>`;
+        <p style="margin:10px 0 0;font-weight:600">${st.newRecord ? (st.prevBest ? '🏆 Nouveau record !' : '🏆 Premier record !') : st.prevBest ? `Record à battre : ${st.prevBest}` : ''}</p></div>
+      <div class="kpis"><div class="kpi"><b>+${st.xp}</b><span>XP gagnés${st.bonus ? ` (dont ${st.bonus} de bonus)` : ''}</span></div><div class="kpi"><b>${acc} %</b><span>Précision (${st.nk}/${st.na})</span></div></div>
+      ${badgePills(st.newBadges)}
+      <div class="btns"><button type="button" class="btn pri grow" data-a="blitzagain">Rejouer</button><button type="button" class="btn grow" data-a="studyback">Terminé</button></div>`;
   }
   if (!st.ready) {
     const best = (db.game.records[scopeKey(st)] || {}).s;
-    return `<div class="topbar">${ib('✕', 'Quitter', 'data-a="studyback"')}<b class="ttl">⚡ Défi éclair</b></div>
-      <div class="box" style="text-align:center"><div style="font-size:3rem;line-height:1.2">⚡</div><h2>60 secondes</h2>
-        <p class="mut">Retourne la carte, puis dis si tu la connais. Fais un maximum de bonnes réponses !<br>Le défi ne modifie pas ton tri.</p>
-        ${best ? `<p style="font-weight:800;margin:0 0 6px">🏆 Record : ${best}</p>` : ''}
-        <button class="pri" data-a="blitzgo" style="width:100%;margin-top:8px">Go !</button></div>`;
+    return navbar({ left: quit, title: 'Défi éclair', solid: true }) + `<div class="card center" style="margin-top:24px;padding:28px 20px"><div style="font-size:3rem;line-height:1.2">⚡</div><h2 style="font-size:24px;margin:4px 0 6px">60 secondes</h2>
+        <p class="mut" style="margin:0 0 14px">Retourne la carte, puis dis si tu la connais. Fais un maximum de bonnes réponses.<br>Le défi ne modifie pas ton tri.</p>
+        ${best ? `<p style="font-weight:600;margin:0 0 14px">🏆 Record : ${best}</p>` : ''}
+        <button type="button" class="btn pri lg block" data-a="blitzgo">Go !</button></div>`;
   }
   const c = db.cards[st.queue[st.i]], left = Math.max(0, st.deadline - now());
-  return `<div class="topbar">${ib('✕', 'Quitter', 'data-a="studyback"')}<b class="ttl">⚡ Défi éclair</b><span class="sp"></span><span class="score" aria-live="polite">✓ ${st.score}</span><span class="btime" id="btime">${Math.ceil(left / 1000)}</span></div>
-    <div class="tbar"><i id="bbar" style="width:${(left / 600).toFixed(1)}%"></i></div>
-    <div class="box fc math" role="button" tabindex="0" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
-    ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Raté</button><button class="ok" data-a="ans" data-id="known">✅ Connue</button></div>`
-      : `<div class="ans"><button class="pri" data-a="flip">Retourner</button></div>`}`;
+  return navbar({ left: quit, title: `✓ ${st.score}`, right: `<span class="btime" id="btime">${Math.ceil(left / 1000)}</span>`, solid: true })
+    + `<div class="tbar"><i id="bbar" style="width:${(left / 600).toFixed(1)}%"></i></div>
+    <div class="fc math" role="button" tabindex="0" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
+    ${st.flip ? `<div class="ans"><button type="button" class="btn ko lg" data-a="ans" data-id="unknown">Raté</button><button type="button" class="btn ok lg" data-a="ans" data-id="known">Connue</button></div>`
+      : `<div class="ans"><button type="button" class="btn pri lg" data-a="flip">Retourner</button></div>`}`;
 }
 
 /* ---------- statistiques ---------- */
 function recordsHTML() {
   const rows = Object.entries(db.game.records).map(([key, r]) => {
     let name = '';
-    if (key === '*') name = '📚 Bibliothèque';
-    else if (key.startsWith('f:')) { const f = db.folders[key.slice(2)]; if (f && !f.deleted) name = '📁 ' + f.name; }
+    if (key === '*') name = 'Bibliothèque';
+    else if (key.startsWith('f:')) { const f = db.folders[key.slice(2)]; if (f && !f.deleted) name = f.name; }
     else { const d = db.decks[key.slice(2)]; if (d && !d.deleted) name = d.name; }
     return name ? { name, s: r.s } : null;
   }).filter(Boolean).sort((a, b) => b.s - a.s).slice(0, 5);
-  if (!rows.length) return '<p class="mut" style="margin:0">Aucun défi joué pour l\'instant. Lance un « ⚡ Défi éclair » depuis Réviser.</p>';
-  return rows.map(r => `<div class="setrow" style="cursor:default"><span>${esc(r.name)}</span><b>${r.s}</b></div>`).join('');
+  if (!rows.length) return '<p class="mut" style="margin:0">Aucun défi joué pour l\'instant. Lance un « Défi éclair » depuis Réviser.</p>';
+  return rows.map(r => `<div class="row static" style="padding:10px 0;min-height:44px"><span class="rt"><b>${esc(r.name)}</b></span><b>${r.s}</b></div>`).join('');
 }
 
 /* ---------- les écrans ---------- */
 const views = {
   home() {
     const first = !decks().length && !Object.keys(db.cards).length;
-    const n = decks().length;
-    return `<div class="hero"><div class="logo"><img src="icon-192.png" alt=""></div><div class="grow"><h1>Flashcards</h1><div class="mut">${n} ${plural(n, 'paquet', 'paquets')}</div></div>
-      <button class="lnk" id="relink" data-a="relogin" hidden>Reconnecter</button>${ib('📊', 'Statistiques', 'data-a="stats"', 'bd')}${ib('⚙️', 'Réglages', 'data-a="settings" id="cloudbtn"', 'bd')}</div>
-      ${cfg.game && !first ? gameCard() : ''}
-      ${!cfg.signedIn && clientId() && !first ? '<div class="banner"><span>☁️ Retrouve tes paquets sur tous tes appareils.</span><button class="pri sm" data-a="connect">Se connecter</button></div>' : ''}
-      ${first ? onboarding() : `<input type="search" id="gsearch" class="search" aria-label="Rechercher une carte" placeholder="🔍 Rechercher une carte…" value="${esc(state.gsearch)}" autocomplete="off"><div id="gres">${homeBody()}</div>`}
-      <button class="fab" data-a="addmenu" title="Ajouter" aria-label="Ajouter">+</button>`;
+    return navbar({ left: '<button type="button" class="nb" id="relink" data-a="relogin" hidden>Reconnecter</button>', title: 'Bibliothèque', right: nbi('plus', 'Ajouter', 'data-a="addmenu"') })
+      + `<h1 class="large">Bibliothèque</h1>`
+      + (cfg.game && !first ? todayCard() : '')
+      + (!cfg.signedIn && clientId() && !first ? `<div class="list" style="margin:0 0 14px">${navrow(tile('cloud', 'b'), 'Synchroniser avec Google', 'Retrouve tes paquets sur tous tes appareils', 'data-a="connect"')}</div>` : '')
+      + (first ? onboarding() : searchBox('gsearch', 'Rechercher une carte', state.gsearch) + `<div id="gres">${homeBody()}</div>`);
+  },
+  folder() {
+    const f = db.folders[state.folderId]; if (goneFolder(f)) return go('home'), '';
+    const ds = decks().filter(d => d.folderId === f.id), s = sumStats(ds);
+    return navbar({ left: back('Bibliothèque', 'home'), title: f.name, right: nbi('plus', 'Nouveau paquet dans ce classeur', 'data-a="newdeck"') + nbi('more', 'Options du classeur', `data-a="foldermenu" data-id="${f.id}"`) })
+      + `<h1 class="large">${esc(f.name)}</h1><p class="subtitle">${ds.length} ${plural(ds.length, 'paquet', 'paquets')} · ${s.total} ${plural(s.total, 'carte', 'cartes')}</p>`
+      + `<div class="btns"><button type="button" class="btn pri block" data-a="studymenu" data-id="f:${f.id}" ${s.total ? '' : 'disabled'}>${icon('play', 18)} Réviser le classeur</button></div>`
+      + (ds.length ? `<div class="list">${ds.map(deckRow).join('')}</div>` : '<div class="empty"><div class="big">📂</div><p>Ce classeur est vide.<br>Touche + pour y créer un paquet.</p></div>');
   },
   deck() {
-    const d = db.decks[state.deckId]; if (!d) return go('home'), '';
-    const s = stats(d.id);
-    return `<div class="topbar">${ib('←', 'Retour', 'data-a="home"')}<span class="sp"></span>${ib('⋯', 'Options du paquet', 'data-a="deckmenu"')}</div>
-      <h1>${esc(d.name)}</h1>
-      <div class="box">${chips(s)}${bar(s)}
-        <div class="bar" style="margin:14px 0 0"><button class="pri grow" data-a="studymenu" data-id="d:${d.id}" ${s.total ? '' : 'disabled'}>▶ Réviser</button><button data-a="addcard">+ Carte</button></div></div>
-      <div class="toolrow"><input type="search" id="dsearch" class="search" aria-label="Rechercher dans ce paquet" placeholder="🔍 Rechercher…" value="${esc(state.search)}" autocomplete="off">
-        <select data-f="filter" aria-label="Filtrer les cartes">${opt('all', 'Toutes', state.filter)}${opt('new', 'Non triées', state.filter)}${opt('unknown', 'À revoir', state.filter)}${opt('known', 'Connues', state.filter)}${opt('flag', '🚩 Marquées', state.filter)}</select>
-        ${ib('☑', 'Sélectionner plusieurs cartes', 'data-a="selmode"')}</div>
-      <div id="selbar">${selBarHTML()}</div>
-      <div id="cardlist">${cardList()}</div>`;
+    const d = db.decks[state.deckId]; if (!d || d.deleted) return go('home'), '';
+    const s = stats(d.id), f = folderOf(d), pct = s.total ? Math.round(s.known / s.total * 100) : 0;
+    const F = state.filter, seg = [['all', 'Toutes'], ['unknown', 'À revoir'], ['new', 'Non triées'], ['known', 'Connues'], ['flag', icon('flag-f', 14)]];
+    return navbar({ left: back(f ? f.name : 'Bibliothèque', 'deckback'), title: d.name,
+        right: state.selMode ? nb('Terminé', 'Terminer la sélection', 'data-a="selcancel"', 'strong') : nbi('more', 'Options du paquet', 'data-a="deckmenu"') })
+      + `<h1 class="large">${esc(d.name)}</h1><p class="subtitle" style="margin-bottom:${s.total ? 6 : 16}px">${s.total} ${plural(s.total, 'carte', 'cartes')}${s.total ? ` · ${pct} % maîtrisées` : ''}</p>`
+      + (s.total ? `${progBar(s)}<div class="legend"><span><i class="dot known"></i>${s.known} ${plural(s.known, 'connue', 'connues')}</span><span><i class="dot unknown"></i>${s.unknown} à revoir</span><span><i class="dot"></i>${s.new} non ${plural(s.new, 'triée', 'triées')}</span></div>` : '')
+      + `<div class="btns"><button type="button" class="btn pri grow" data-a="studymenu" data-id="d:${d.id}" ${s.total ? '' : 'disabled'}>${icon('play', 18)} Réviser</button><button type="button" class="btn" data-a="addcard">${icon('plus', 18)} Carte</button></div>`
+      + searchBox('dsearch', 'Rechercher dans ce paquet', state.search)
+      + `<div class="seg" role="group" aria-label="Filtrer les cartes">${seg.map(([k, l]) => `<button type="button" class="${F === k ? 'on' : ''}" data-a="setfilter" data-id="${k}" aria-pressed="${F === k}" ${k === 'flag' ? 'aria-label="Marquées"' : ''}>${l}</button>`).join('')}</div>`
+      + `<div id="selbar">${selBarHTML()}</div><div id="cardlist">${cardList()}</div>`;
   },
   edit() {
-    const c = state.editId ? db.cards[state.editId] : null;
-    const fresh = !c && state.editFrom !== 'study';
-    return `<div class="topbar">${ib('←', 'Retour', 'data-a="canceledit"')}<b class="ttl">${c ? 'Modifier la carte' : 'Nouvelle carte'}</b><span class="sp"></span>
-        ${c ? `${ib(c.flag ? '🚩' : '⚐', 'Marquer cette carte', 'data-a="flagedit"')}${ib('🗑', 'Supprimer cette carte', 'data-a="delcard"', 'danger')}` : ''}</div>
-      ${fresh && state.addCount ? `<p class="mut">✅ ${state.addCount} ${plural(state.addCount, 'carte ajoutée', 'cartes ajoutées')} — continue ou reviens avec ←</p>` : ''}
-      ${latexToolbar()}
-      <label for="eq">Question</label><textarea id="eq" placeholder="Texte + LaTeX, ex : dérivée de $x^2$ ?">${esc(c ? c.q : '')}</textarea>
-      <label for="ea">Réponse</label><textarea id="ea" placeholder="ex : $2x$">${esc(c ? c.a : '')}</textarea>
-      <label>Aperçu</label><div class="box math" id="epv"></div>
-      <div class="bar"><button class="pri grow" data-a="savecard">${fresh ? 'Ajouter la carte' : 'Enregistrer'}</button></div>`;
+    const c = state.editId ? db.cards[state.editId] : null, fresh = !c && state.editFrom !== 'study';
+    return navbar({ solid: true, left: nb(fresh ? 'Terminer' : 'Annuler', '', 'data-a="canceledit"'), title: c ? 'Modifier la carte' : 'Nouvelle carte', right: nb(fresh ? 'Ajouter' : 'OK', '', 'data-a="savecard"', 'strong') })
+      + `<div style="height:8px"></div>${fresh && state.addCount ? `<p class="subtitle center" style="margin-bottom:10px">${state.addCount} ${plural(state.addCount, 'carte ajoutée', 'cartes ajoutées')}</p>` : ''}`
+      + toolbar()
+      + `<div class="list"><div class="cell"><label for="eq">Question</label><textarea id="eq" placeholder="Texte, formules LaTeX…">${esc(c ? c.q : '')}</textarea></div>
+          <div class="cell"><label for="ea">Réponse</label><textarea id="ea" placeholder="Texte, formules LaTeX…">${esc(c ? c.a : '')}</textarea></div></div>
+        <div class="grp-h">Aperçu</div><div class="list"><div class="preview math" id="epv"></div></div>`
+      + (c ? `<div class="grp-h"></div><div class="list"><button type="button" class="row ic tintx" data-a="flagedit">${tile(c.flag ? 'flag-f' : 'flag', 'r')}<span class="rt"><b>${c.flag ? 'Retirer la marque' : 'Marquer cette carte'}</b></span></button><button type="button" class="row ic danger" data-a="delcard">${tile('trash', 'r')}<span class="rt"><b>Supprimer la carte</b></span></button></div>` : '');
   },
   study() {
     const st = state.study;
     if (st.mode === 'blitz') return blitzView(st);
     if (st.i >= st.queue.length) return summaryView(st);
     const c = db.cards[st.queue[st.i]], li = cfg.game ? levelInfo(totalXp()) : null;
-    return `<div class="topbar">${ib('✕', 'Quitter', 'data-a="studyback"')}<span class="mut grow" style="text-align:center">${esc(scopeName(st))} · ${st.i + 1}/${st.queue.length}${st.round > 1 ? ` · tour ${st.round}` : ''}</span>
-        ${ib('↩', 'Carte précédente', `data-a="back" ${st.i ? '' : 'disabled'}`)}${ib(c.flag ? '🚩' : '⚐', 'Marquer cette carte (F)', 'data-a="flagstudy"')}${ib('✏️', 'Modifier cette carte', 'data-a="editstudy"')}</div>
-      ${li ? `<div class="hud"><span class="lvlchip">Niv. ${li.level}</span><div class="xpbar"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div><span class="combo ${st.combo >= 2 ? 'on' : ''}" id="combo" aria-label="Série de bonnes réponses">🔥 ×${st.combo}</span></div>` : ''}
-      <div class="prog" style="margin:0 0 12px"><i class="g" style="width:${st.i / st.queue.length * 100}%"></i></div>
-      <div class="box fc math" role="button" tabindex="0" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span><div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>
-      ${st.flip ? `<div class="ans"><button class="ko" data-a="ans" data-id="unknown">❌ Je ne connais pas</button><button class="ok" data-a="ans" data-id="known">✅ Je connais</button></div>`
-        : `<div class="ans"><button class="pri" data-a="flip">Retourner</button></div>`}`;
+    return navbar({ solid: true, left: nbi('x', 'Quitter', 'data-a="studyback"'), title: `${scopeName(st)} · ${st.i + 1}/${st.queue.length}${st.round > 1 ? ` · tour ${st.round}` : ''}`,
+        right: nbi('plus', 'Ajouter une carte', 'data-a="quickadd"') + nbi('more', 'Plus d\'options', 'data-a="studymore"') })
+      + `<div class="sprog"><i style="width:${st.i / st.queue.length * 100}%"></i></div>`
+      + (li ? `<div class="hud"><span class="lvlchip">Niv. ${li.level}</span><div class="xpbar"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div><span class="combo ${st.combo >= 2 ? 'on' : ''}" id="combo" aria-label="Série de bonnes réponses">🔥 ×${st.combo}</span></div>` : '')
+      + `<div class="fc math" role="button" tabindex="0" data-a="flip"><span class="lab">${st.flip ? 'Réponse' : 'Question'}</span>${c.flag ? `<span class="flagmark" title="Marquée">${icon('flag-f', 20)}</span>` : ''}<div class="fc-in">${fmt(st.flip ? c.a : c.q)}</div></div>`
+      + (st.flip ? `<div class="ans"><button type="button" class="btn ko lg" data-a="ans" data-id="unknown">Je ne connais pas</button><button type="button" class="btn ok lg" data-a="ans" data-id="known">Je connais</button></div>`
+        : `<div class="ans"><button type="button" class="btn pri lg" data-a="flip">Retourner</button></div>`);
   },
   import() {
-    const i = state.imp;
-    const target = `<label for="impdeck">Paquet de destination</label><select id="impdeck" data-f="deckId">${opt('', '➕ Nouveau paquet…', i.deckId)}${decks().map(d => opt(d.id, esc(d.name), i.deckId)).join('')}</select>
-      ${i.deckId ? '' : `<label for="impname">Nom du nouveau paquet</label><input type="text" id="impname" data-f="newName" value="${esc(i.newName)}">`}`;
-    const csv = `<label for="csvfile">Fichier CSV (colonne 1 = question, colonne 2 = réponse)</label><input type="file" id="csvfile" accept=".csv,.txt,.tsv">
-      <div class="row"><div><label for="impdelim">Séparateur de colonnes</label><select id="impdelim" data-f="delim">${opt('auto', 'Automatique', i.delim)}${opt(';', 'Point-virgule ;', i.delim)}${opt(',', 'Virgule ,', i.delim)}${opt('\t', 'Tabulation', i.delim)}</select></div>
-      <div><label>&nbsp;</label><label style="font-weight:400"><input type="checkbox" data-f="header" ${i.header ? 'checked' : ''}> 1ʳᵉ ligne = en-têtes</label></div></div>`;
-    const paste = `<label for="ptext">Colle ton texte</label>${latexToolbar()}<textarea id="ptext" data-f="text" style="min-height:160px">${esc(i.text)}</textarea>
-      <div class="row"><div><label for="impcs">Entre deux cartes</label><select id="impcs" data-f="cardSep">${opt('nl', 'Nouvelle ligne', i.cardSep)}${opt('blank', 'Ligne vide', i.cardSep)}${opt('custom', 'Personnalisé…', i.cardSep)}</select>
-      ${i.cardSep === 'custom' ? `<input type="text" aria-label="Séparateur de cartes" data-f="customCard" value="${esc(i.customCard)}" placeholder="ex: ;;  (\\n = retour ligne)">` : ''}</div>
-      <div><label for="impfs">Entre question et réponse</label><select id="impfs" data-f="fieldSep">${opt('tab', 'Tabulation', i.fieldSep)}${opt(';', 'Point-virgule ;', i.fieldSep)}${opt(',', 'Virgule ,', i.fieldSep)}${opt(' - ', 'Tiret « - »', i.fieldSep)}${opt(' : ', 'Deux-points « : »', i.fieldSep)}${opt('|', 'Barre |', i.fieldSep)}${opt('=', 'Égal =', i.fieldSep)}${opt('custom', 'Personnalisé…', i.fieldSep)}</select>
-      ${i.fieldSep === 'custom' ? `<input type="text" aria-label="Séparateur question/réponse" data-f="customField" value="${esc(i.customField)}" placeholder="ex: ->  ou  ???">` : ''}</div></div>
-      <label for="impwhich">Si le séparateur apparaît plusieurs fois</label><select id="impwhich" data-f="which">${opt('first', 'Couper au premier', i.which)}${opt('last', 'Couper au dernier', i.which)}</select>`;
-    const manual = `${i.addCount ? `<p class="mut">✅ ${i.addCount} ${plural(i.addCount, 'carte ajoutée', 'cartes ajoutées')} dans cette session.</p>` : ''}
-      ${latexToolbar()}
-      <label for="mq">Question</label><textarea id="mq" placeholder="Texte + LaTeX, ex : dérivée de $x^2$ ?"></textarea>
-      <label for="ma">Réponse</label><textarea id="ma" placeholder="ex : $2x$"></textarea>
-      <label>Aperçu</label><div class="box math" id="mpv"></div>
-      <button class="pri" data-a="addmanual">+ Ajouter cette carte</button>`;
-    return `<div class="topbar">${ib('←', 'Retour', `data-a="${state.impFrom === 'deck' ? 'opendeck' : 'home'}"`)}<b class="ttl">Importer des cartes</b></div>
-      <div class="bar tabs"><button class="${i.tab === 'csv' ? 'on' : ''}" data-a="imptab" data-id="csv">📄 Fichier CSV</button><button class="${i.tab === 'paste' ? 'on' : ''}" data-a="imptab" data-id="paste">📋 Copier-coller</button><button class="${i.tab === 'manual' ? 'on' : ''}" data-a="imptab" data-id="manual">✍️ Carte par carte</button></div>
-      <div class="box">${target}${i.tab === 'csv' ? csv : i.tab === 'paste' ? paste : manual}</div>
-      ${i.tab !== 'manual' ? `<div class="box"><b id="impcount"></b><div class="pv math" id="imppv"></div></div>
-      <button class="pri" data-a="doimport">Importer</button>` : ''}`;
+    const i = state.imp, tab = (k, l) => `<button type="button" class="${i.tab === k ? 'on' : ''}" data-a="imptab" data-id="${k}">${l}</button>`;
+    const target = `<div class="list" style="margin-bottom:14px"><div class="row static"><span class="rt"><b>Paquet</b></span><select id="impdeck" data-f="deckId" aria-label="Paquet de destination">${opt('', 'Nouveau paquet…', i.deckId)}${decks().map(d => opt(d.id, esc(d.name), i.deckId)).join('')}</select></div>
+      ${i.deckId ? '' : `<div class="cell"><label for="impname">Nom du nouveau paquet</label><input type="text" id="impname" data-f="newName" value="${esc(i.newName)}" placeholder="Ex : Chimie organique"></div>`}</div>`;
+    const sel = (id, f, opts, cur, lab) => `<div class="row static"><span class="rt"><b>${lab}</b></span><select id="${id}" data-f="${f}" aria-label="${esc(lab)}">${opts.map(o => opt(o[0], o[1], cur)).join('')}</select></div>`;
+    const csv = `<div class="list"><div class="cell"><label for="csvfile">Fichier CSV — colonne 1 : question, colonne 2 : réponse</label><input type="file" id="csvfile" accept=".csv,.txt,.tsv"></div>
+      ${sel('impdelim', 'delim', [['auto', 'Automatique'], [';', 'Point-virgule ;'], [',', 'Virgule ,'], ['\t', 'Tabulation']], i.delim, 'Séparateur')}
+      <label class="row static"><span class="rt"><b>1ʳᵉ ligne = en-têtes</b></span><input type="checkbox" class="sw" data-f="header" ${i.header ? 'checked' : ''}></label></div>`;
+    const paste = `${toolbar()}<div class="list" style="margin-bottom:14px"><div class="cell"><label for="ptext">Colle ton texte</label><textarea id="ptext" data-f="text" style="min-height:130px">${esc(i.text)}</textarea></div></div>
+      <div class="list">${sel('impcs', 'cardSep', [['nl', 'Nouvelle ligne'], ['blank', 'Ligne vide'], ['custom', 'Personnalisé…']], i.cardSep, 'Entre deux cartes')}
+      ${i.cardSep === 'custom' ? `<div class="cell"><input type="text" aria-label="Séparateur de cartes" data-f="customCard" value="${esc(i.customCard)}" placeholder="Ex : ;;   (\\n = retour à la ligne)"></div>` : ''}
+      ${sel('impfs', 'fieldSep', [['tab', 'Tabulation'], [';', 'Point-virgule ;'], [',', 'Virgule ,'], [' - ', 'Tiret « - »'], [' : ', 'Deux-points « : »'], ['|', 'Barre |'], ['=', 'Égal ='], ['custom', 'Personnalisé…']], i.fieldSep, 'Question / réponse')}
+      ${i.fieldSep === 'custom' ? `<div class="cell"><input type="text" aria-label="Séparateur question/réponse" data-f="customField" value="${esc(i.customField)}" placeholder="Ex : ->   ou   ???"></div>` : ''}
+      ${sel('impwhich', 'which', [['first', 'Au premier'], ['last', 'Au dernier']], i.which, 'Si le séparateur se répète')}</div>`;
+    const manual = `${i.addCount ? `<p class="subtitle center" style="margin-bottom:10px">${i.addCount} ${plural(i.addCount, 'carte ajoutée', 'cartes ajoutées')}</p>` : ''}${toolbar()}
+      <div class="list"><div class="cell"><label for="mq">Question</label><textarea id="mq" placeholder="Texte, formules LaTeX…"></textarea></div><div class="cell"><label for="ma">Réponse</label><textarea id="ma" placeholder="Texte, formules LaTeX…"></textarea></div></div>
+      <div class="grp-h">Aperçu</div><div class="list"><div class="preview math" id="mpv"></div></div>
+      <div class="btns" style="margin-top:16px"><button type="button" class="btn pri block" data-a="addmanual">${icon('plus', 18)} Ajouter cette carte</button></div>`;
+    return navbar({ solid: true, left: nb('Retour', '', `data-a="${state.impFrom === 'deck' ? 'opendeck' : 'home'}"`), title: 'Importer des cartes' })
+      + `<div style="height:8px"></div><div class="seg" role="group" aria-label="Méthode d'import">${tab('csv', 'Fichier CSV')}${tab('paste', 'Coller')}${tab('manual', 'Une par une')}</div>`
+      + target + (i.tab === 'csv' ? csv : i.tab === 'paste' ? paste : manual)
+      + (i.tab !== 'manual' ? `<div class="grp-h">Aperçu · <span id="impcount"></span></div><div class="list"><div class="preview math" id="imppv" style="font-size:15px"></div></div>
+        <div class="btns" style="margin-top:16px"><button type="button" class="btn pri block" data-a="doimport">Importer</button></div>` : '');
   },
   stats() {
     const t = gameTotals(), li = levelInfo(t.xp), sk = streakInfo(), days = lastDays(14), max = Math.max(5, ...days.map(d => d.n));
-    const s = sumStats(decks()), acc = t.n ? Math.round(t.k / t.n * 100) : 0, g = cfg.game;
-    const wk = days.slice(-7).reduce((a, d) => a + d.n, 0);
-    return `<div class="topbar">${ib('←', 'Retour', 'data-a="home"')}<b class="ttl">${g ? 'Profil' : 'Statistiques'}</b></div>
-      ${g ? `<div class="box gcard"><div class="glvl" style="margin-top:0"><span class="lvlchip">Niv. ${li.level}</span><b>${esc(li.title)}</b><span class="sp"></span><span class="mut">${t.xp} XP</span></div>
-        <div class="xpbar"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div><p class="mut" style="margin:8px 0 0">${li.need - li.into} XP avant le niveau ${li.level + 1}</p></div>` : ''}
-      <div class="kpis"><div class="kpi"><b>${t.n}</b><span>Cartes révisées</span></div><div class="kpi"><b>${acc}%</b><span>Précision</span></div>
-        <div class="kpi"><b>🔥 ${sk.cur}</b><span>Jours de suite (record ${sk.best})</span></div><div class="kpi"><b>${wk}</b><span>Révisions sur 7 jours</span></div></div>
-      <div class="box"><h2>14 derniers jours</h2><div class="chart" role="img" aria-label="Cartes révisées par jour sur 14 jours">${days.map(d => `<div class="cbar" title="${esc(d.label)} : ${d.n}"><div class="cb-track"><i class="${d.today ? 'today' : d.n ? 'on' : ''}" style="height:${d.n ? Math.max(6, d.n / max * 100) : 2}%"></i></div><span>${d.dow}</span></div>`).join('')}</div></div>
-      <div class="box"><h2>Ma bibliothèque</h2>${bar(s)}<div class="chips"><span class="chip">${s.total} ${plural(s.total, 'carte', 'cartes')}</span><span class="chip g">✓ ${s.known} connues</span><span class="chip r">✗ ${s.unknown} à revoir</span><span class="chip">○ ${s.new} non triées</span></div>
-        <p class="mut" style="margin:10px 0 0">${s.total ? Math.round(s.known / s.total * 100) : 0}% maîtrisé · ${decks().length} ${plural(decks().length, 'paquet', 'paquets')}</p></div>
-      ${g ? `<div class="box"><h2>Badges · ${Object.keys(db.game.badges).filter(id => BADGES.some(b => b.id === id)).length} / ${BADGES.length}</h2><div class="badges">${BADGES.map(b => { const on = !!db.game.badges[b.id]; return `<div class="badge ${on ? 'on' : ''}"><span class="bi" aria-hidden="true">${on ? b.icon : '🔒'}</span><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`; }).join('')}</div></div>
-        <div class="box"><h2>⚡ Records du défi éclair</h2>${recordsHTML()}</div>`
-        : `<div class="box"><b>🎮 Envie de t'amuser en révisant ?</b><p class="mut">Le mode jeu ajoute des XP, des niveaux, des séries de jours, un objectif quotidien, des badges et un défi chronométré. Tu peux le désactiver à tout moment.</p><button class="pri" data-a="gameon">Activer le mode jeu</button></div>`}`;
+    const s = sumStats(decks()), acc = t.n ? Math.round(t.k / t.n * 100) : 0, g = cfg.game, wk = days.slice(-7).reduce((a, d) => a + d.n, 0);
+    return navbar({ title: g ? 'Profil' : 'Progrès' }) + `<h1 class="large">${g ? 'Profil' : 'Progrès'}</h1>`
+      + (g ? `<div class="card"><div class="glvl" style="margin-top:0"><span class="lvlchip">Niv. ${li.level}</span><b>${esc(li.title)}</b><span class="sp"></span><span class="mut">${t.xp} XP</span></div>
+        <div class="xpbar"><i style="width:${(li.pct * 100).toFixed(1)}%"></i></div><p class="mut" style="margin:8px 0 0;font-size:14px">${li.need - li.into} XP avant le niveau ${li.level + 1}</p></div>` : '')
+      + `<div class="kpis"><div class="kpi"><b>${t.n}</b><span>Cartes révisées</span></div><div class="kpi"><b>${acc} %</b><span>Précision</span></div>
+        <div class="kpi"><b>🔥 ${sk.cur}</b><span>Jours de suite (record ${sk.best})</span></div><div class="kpi"><b>${wk}</b><span>Révisions sur 7 jours</span></div></div>`
+      + `<div class="card"><h2>14 derniers jours</h2><div class="chart" role="img" aria-label="Cartes révisées par jour sur 14 jours">${days.map(d => `<div class="cbar" title="${esc(d.label)} : ${d.n}"><div class="cb-track"><i class="${d.today ? 'today' : d.n ? 'on' : ''}" style="height:${d.n ? Math.max(6, d.n / max * 100) : 2}%"></i></div><span>${d.dow}</span></div>`).join('')}</div></div>`
+      + `<div class="card"><h2>Ma bibliothèque</h2>${progBar(s)}<div class="legend" style="margin:0"><span><i class="dot known"></i>${s.known} connues</span><span><i class="dot unknown"></i>${s.unknown} à revoir</span><span><i class="dot"></i>${s.new} non triées</span></div>
+        <p class="mut" style="margin:10px 0 0;font-size:14px">${s.total ? Math.round(s.known / s.total * 100) : 0} % maîtrisé · ${s.total} ${plural(s.total, 'carte', 'cartes')} · ${decks().length} ${plural(decks().length, 'paquet', 'paquets')}</p></div>`
+      + (g ? `<div class="card"><h2>Badges · ${Object.keys(db.game.badges).filter(id => BADGES.some(b => b.id === id)).length} / ${BADGES.length}</h2><div class="badges">${BADGES.map(b => { const on = !!db.game.badges[b.id]; return `<div class="badge ${on ? 'on' : ''}"><span class="bi" aria-hidden="true">${on ? b.icon : '🔒'}</span><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`; }).join('')}</div></div>
+        <div class="card"><h2>Records du défi éclair</h2>${recordsHTML()}</div>`
+        : `<div class="card"><h2>Envie de t'amuser en révisant ?</h2><p class="mut" style="margin:0 0 12px">Le mode jeu ajoute des XP, des niveaux, des séries de jours, un objectif quotidien, des badges et un défi chronométré. Tu peux le désactiver à tout moment.</p><button type="button" class="btn pri" data-a="gameon">Activer le mode jeu</button></div>`);
   },
   settings() {
-    const need = !clientId(), g = !!cfg.game, bad = cfg.signedIn && state.needLogin;
-    return `<div class="topbar">${ib('←', 'Retour', 'data-a="home"')}<b class="ttl">Réglages</b></div>
-      <div class="sgroup">Jeu</div>
-      <div class="setcard">${setrow('🎮 Mode jeu', 'XP, niveaux, séries, objectif du jour, badges et défi éclair', switchCtl('game', g))}
-        ${g ? setrow('Objectif quotidien', 'Cartes à réviser chaque jour', `<select data-s="goal" aria-label="Objectif quotidien">${[10, 20, 30, 50, 100].map(n => opt(n, n + ' cartes', cfg.goal || 20)).join('')}</select>`) : ''}
-        ${g ? setrow('Sons et vibrations', 'Retours sonores discrets pendant la révision', switchCtl('sound', !!cfg.sound)) : ''}</div>
-      <div class="sgroup">Étude</div>
-      <div class="setcard">${setrow('🔀 Mélanger les cartes', 'Ordre aléatoire à chaque session', switchCtl('shuffle', cfg.shuffle !== false))}
-        ${setrow('🚩 Marquer mes erreurs', 'Une carte « je ne connais pas » est marquée automatiquement', switchCtl('autoFlag', cfg.autoFlag !== false))}</div>
-      <div class="sgroup">Apparence</div>
-      <div class="setcard">${setrow('Thème', '', `<select data-s="theme" aria-label="Thème">${opt('auto', 'Automatique', cfg.theme)}${opt('light', 'Clair', cfg.theme)}${opt('dark', 'Sombre', cfg.theme)}</select>`)}</div>
-      <div class="sgroup">Compte et synchronisation</div>
-      <div class="setcard"><div class="pad"><p class="mut" style="margin-top:0">Connecte-toi avec ton compte Google : ta bibliothèque est stockée dans le dossier caché de l'app sur ton Google Drive et se synchronise automatiquement entre tes appareils.</p>
-        ${cfg.signedIn ? `<p style="margin:0 0 10px">${bad ? '⚠️ Reconnexion nécessaire' : '✅ Connecté'}${cfg.email ? ' · <b>' + esc(cfg.email) + '</b>' : ''}</p><div class="bar">${bad ? '<button class="pri" data-a="relogin">Se reconnecter</button>' : '<button class="pri" data-a="sync">🔄 Synchroniser maintenant</button>'}<button data-a="unlink">Se déconnecter</button></div>`
-          : '<div class="bar"><button class="pri" data-a="connect">Se connecter avec Google</button></div>'}
-        <div class="mut" id="syncmsg">${esc(state.msg || (cfg.last ? 'Dernière synchro : ' + new Date(cfg.last).toLocaleString('fr-FR') : ''))}</div></div></div>
-      <details class="box" ${need ? 'open' : ''}><summary><b>Configuration Google & rester connecté</b></summary>
-        <p class="mut"><b>💡 Pour ne jamais être déconnecté :</b> console Google Cloud → <i>Google Auth Platform</i> → <i>Audience</i> → <b>« Publier l'application »</b>. Tant que l'app est en mode « Test », Google coupe l'accès toutes les semaines.</p>
-        <ol class="mut"><li>Va sur console.cloud.google.com → crée un projet.</li>
-        <li>« API et services » → « Bibliothèque » → active <b>Google Drive API</b>.</li>
-        <li>« Écran de consentement OAuth » → Externe → ajoute ton adresse Gmail comme utilisateur test.</li>
-        <li>« Identifiants » → Créer → ID client OAuth → <b>Application Web</b>. Dans « Origines JavaScript autorisées » ajoute <code>${esc(location.origin)}</code>.</li>
-        <li>Colle l'ID client ci-dessous (ou dans <code>GOOGLE_CLIENT_ID</code> en haut de <code>js/sync.js</code>).</li></ol>
-        <label for="cid">ID client Google</label><input type="text" id="cid" value="${esc(clientId())}" placeholder="123-abc.apps.googleusercontent.com"></details>
-      <div class="sgroup">Données</div>
-      <div class="setcard">${setact('Exporter une sauvegarde', 'Fichier JSON de toute ta bibliothèque', '<button class="sm" data-a="export">Exporter</button>')}
-        ${setact('Importer une sauvegarde', 'Fusionne un fichier JSON avec ta bibliothèque', '<label class="btn sm" style="margin:0;cursor:pointer">Importer<input type="file" id="jsonfile" accept=".json" hidden></label>')}
-        ${setact('Réinitialiser la progression du jeu', 'XP, badges, séries et records — tes cartes sont conservées', '<button class="sm danger" data-a="resetgame">Réinitialiser</button>')}</div>
-      <div class="sgroup">À propos</div>
-      <div class="setcard"><div class="pad mut"><b style="color:var(--fg)">Flashcards</b> · version ${APP_VERSION}<br>Fonctionne hors ligne. Formules LaTeX avec KaTeX (MIT), police Nunito (OFL).
-        <p style="margin:10px 0 0"><kbd>Espace</kbd> retourner · <kbd>←</kbd> je ne connais pas · <kbd>→</kbd> je connais · <kbd>F</kbd> marquer · <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>U</kbd> gras / souligné</p></div></div>`;
+    const g = !!cfg.game, bad = cfg.signedIn && state.needLogin, need = !clientId();
+    const sel = (key, opts, cur, lab) => `<select data-s="${key}" aria-label="${lab}">${opts.map(o => opt(o[0], o[1], cur)).join('')}</select>`;
+    return navbar({ title: 'Réglages' }) + `<h1 class="large">Réglages</h1>`
+      + `<div class="grp-h">Jeu</div><div class="list">${setrow(tile('star', 'o'), 'Mode jeu', 'XP, niveaux, séries, badges et défi éclair', switchCtl('game', g))}
+        ${g ? setrow(tile('check', 'g'), 'Objectif du jour', '', sel('goal', [10, 20, 30, 50, 100].map(n => [n, n + ' cartes']), cfg.goal || 20, 'Objectif quotidien')) : ''}
+        ${g ? setrow(tile('bolt', 'y'), 'Sons et vibrations', '', switchCtl('sound', !!cfg.sound)) : ''}</div>`
+      + `<div class="grp-h">Étude</div><div class="list">${setrow(tile('shuffle', 'b'), 'Mélanger les cartes', 'Ordre aléatoire à chaque session', switchCtl('shuffle', cfg.shuffle !== false))}
+        ${setrow(tile('flag', 'r'), 'Marquer mes erreurs', 'Une carte « je ne connais pas » reçoit un drapeau', switchCtl('autoFlag', cfg.autoFlag !== false))}</div>`
+      + `<div class="grp-h">Apparence</div><div class="list">${setrow(tile('sun', 'p'), 'Thème', '', sel('theme', [['auto', 'Automatique'], ['light', 'Clair'], ['dark', 'Sombre']], cfg.theme, 'Thème'))}
+        ${setrow(tile('highlighter', 'g'), 'Couleur d\'accent', '', sel('accent', Object.entries(ACCENT_NAMES), cfg.accent || 'green', 'Couleur d\'accent'))}</div>`
+      + `<div class="grp-h">Synchronisation</div><div class="list">${cfg.signedIn
+          ? `<div class="row ic static">${tile('cloud', bad ? 'r' : 'b')}<span class="rt"><b>Google Drive</b><small>${bad ? 'Reconnexion nécessaire' : 'Connecté'}${cfg.email ? ' · ' + esc(cfg.email) : ''}</small></span>${bad ? '<button type="button" class="btn pri sm" data-a="relogin">Reconnecter</button>' : '<button type="button" class="btn sm" data-a="sync">Synchroniser</button>'}</div>
+             <button type="button" class="row ic danger" data-a="unlink">${tile('x', 'r')}<span class="rt"><b>Se déconnecter</b></span></button>`
+          : navrow(tile('cloud', 'b'), 'Se connecter avec Google', 'Ta bibliothèque est stockée dans un dossier caché de ton Google Drive', 'data-a="connect"')}</div>
+        <p class="grp-f" id="syncmsg">${esc(state.msg || (cfg.last ? 'Dernière synchronisation : ' + new Date(cfg.last).toLocaleString('fr-FR') : ''))}</p>
+        <details class="list" style="margin-top:12px" ${need ? 'open' : ''}><summary>Configuration Google et connexion durable</summary><div class="dbody">
+          <p style="margin-top:0"><b style="color:var(--fg)">Pour ne jamais être déconnecté :</b> console Google Cloud → <i>Google Auth Platform</i> → <i>Audience</i> → <b>Publier l'application</b>. En mode « Test », Google coupe l'accès toutes les semaines.</p>
+          <ol><li>console.cloud.google.com → crée un projet.</li><li>« API et services » → active <b>Google Drive API</b>.</li><li>« Écran de consentement OAuth » → Externe → ajoute ton Gmail comme utilisateur test.</li>
+          <li>« Identifiants » → ID client OAuth → <b>Application Web</b> ; origine JavaScript autorisée : <code>${esc(location.origin)}</code>.</li><li>Colle l'ID client ci-dessous (ou dans <code>GOOGLE_CLIENT_ID</code> de <code>js/sync.js</code>).</li></ol>
+          <label class="fl" for="cid">ID client Google</label><input type="text" id="cid" value="${esc(clientId())}" placeholder="123-abc.apps.googleusercontent.com"></div></details>`
+      + `<div class="grp-h">Données</div><div class="list">${navrow(tile('upload', 'gr'), 'Exporter une sauvegarde', 'Fichier JSON de toute ta bibliothèque', 'data-a="export"')}
+        <label class="row ic">${tile('download', 'gr')}<span class="rt"><b>Importer une sauvegarde</b><small>Fusionne un fichier JSON avec ta bibliothèque</small></span><span class="trail">${icon('chev-r', 18)}</span><input type="file" id="jsonfile" accept=".json" hidden></label>
+        <button type="button" class="row ic danger" data-a="resetgame">${tile('undo', 'r')}<span class="rt"><b>Réinitialiser la progression du jeu</b><small>XP, badges, séries et records — tes cartes sont conservées</small></span></button></div>`
+      + `<div class="grp-h">À propos</div><div class="list"><div class="row static" style="display:block;padding:14px 16px"><b>Flashcards</b> <span class="mut">version ${APP_VERSION}</span>
+        <p class="mut" style="margin:6px 0 0;font-size:14px">Fonctionne hors ligne. Formules : KaTeX (MIT) · Police : Inter (OFL) · Icônes : Feather (MIT).</p>
+        <p class="mut" style="margin:10px 0 0;font-size:14px"><kbd>Espace</kbd> retourner · <kbd>←</kbd> je ne connais pas · <kbd>→</kbd> je connais · <kbd>F</kbd> marquer · <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>U</kbd> gras / souligné</p></div></div>`;
   },
 };
 function render() {
+  hidePill();
   $app.innerHTML = views[state.view]();
-  if (state.view === 'home') updateCloud();
+  renderTabbar(); setupNav();
   if (state.view === 'import') { if (state.imp.tab === 'manual') updateManualPv(); else updatePreview(); }
-  if (state.view === 'edit') { updateEditPv(); const el = $(state.lastField === 'ea' ? 'ea' : 'eq'); if (el && !state.editId) el.focus(); }
+  if (state.view === 'edit') { updateEditPv(); state.lastField = 'eq'; const el = $('eq'); if (el && !state.editId) el.focus(); }
   typeset();
 }

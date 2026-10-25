@@ -5,28 +5,32 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Flashcards</title>
 <meta name="description" content="Révise avec des flashcards : tri « je connais / je ne connais pas », formules LaTeX, synchronisation Google Drive, mode jeu optionnel.">
-<meta name="theme-color" content="#4b8a63">
+<meta name="theme-color" content="#f2f2f7">
 <meta name="color-scheme" content="light dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Flashcards">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="preload" href="vendor/fonts/nunito-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="vendor/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="vendor/katex/katex.min.css">
 <link rel="stylesheet" href="css/app.css">
-<script>try{var t=JSON.parse(localStorage.getItem('fc_cfg')||'{}').theme;if(t==='dark'||t==='light')document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var c=JSON.parse(localStorage.getItem('fc_cfg')||'{}');if(c.theme==='dark'||c.theme==='light')document.documentElement.dataset.theme=c.theme}catch(e){}</script>
 </head>
 <body>
 <noscript><p style="padding:24px;font-family:sans-serif">Flashcards a besoin de JavaScript pour fonctionner.</p></noscript>
 <div id="offline" hidden>Hors ligne — tes modifications sont enregistrées sur cet appareil</div>
 <div id="app"></div>
+<nav id="tabbar" aria-label="Navigation principale"></nav>
 <div id="sheet"></div>
+<div id="compose"></div>
 <div id="dialog"></div>
 <div id="toasts" aria-live="polite"></div>
 <script defer src="vendor/katex/katex.min.js"></script>
 <script defer src="vendor/katex/auto-render.min.js"></script>
+<script defer src="js/icons.js"></script>
 <script defer src="js/util.js"></script>
 <script defer src="js/store.js"></script>
 <script defer src="js/ui.js"></script>

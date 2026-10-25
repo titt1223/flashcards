@@ -1,15 +1,16 @@
-/* Service worker — Flashcards v2.0.0
+/* Service worker — Flashcards v2.1.0
    - tout est pré-chargé : l'app (formules LaTeX comprises) fonctionne hors ligne
    - fichiers de l'app : réseau d'abord (toujours à jour quand tu es en ligne), cache en secours
    - /vendor/ (KaTeX, police) : cache d'abord, ces fichiers ne changent jamais
    - une nouvelle version attend ton accord (« Actualiser ») au lieu de s'imposer pendant une session */
-const VERSION = 'v2.0.0';
+const VERSION = 'v2.1.0';
 const CACHE = 'fc-' + VERSION;
 const PRECACHE = [
  "./",
  "index.html",
  "manifest.webmanifest",
  "css/app.css",
+ "js/icons.js",
  "js/util.js",
  "js/store.js",
  "js/ui.js",
@@ -25,7 +26,7 @@ const PRECACHE = [
  "vendor/katex/katex.min.css",
  "vendor/katex/katex.min.js",
  "vendor/katex/auto-render.min.js",
- "vendor/fonts/nunito-latin.woff2",
+ "vendor/fonts/inter-latin.woff2",
  "vendor/katex/fonts/KaTeX_AMS-Regular.woff2",
  "vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2",
  "vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2",
