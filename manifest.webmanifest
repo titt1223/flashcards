@@ -1,2 +1,23 @@
-{"name":"Flashcards","short_name":"Flashcards","start_url":".","scope":".","display":"standalone","background_color":"#4b8a63","theme_color":"#4b8a63",
-"icons":[{"src":"icon-192.png","sizes":"192x192","type":"image/png"},{"src":"icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]}
+{
+  "id": "./",
+  "name": "Flashcards",
+  "short_name": "Flashcards",
+  "description": "Révise avec des flashcards : tri « je connais / je ne connais pas », LaTeX, synchronisation Google Drive et mode jeu.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eef4ef",
+  "theme_color": "#4b8a63",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Session du jour", "short_name": "Aujourd'hui", "url": "./?a=today", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Rechercher une carte", "short_name": "Rechercher", "url": "./?a=search", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+  ]
+}
